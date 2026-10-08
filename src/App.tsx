@@ -51,6 +51,26 @@ export default function App(){
     const map:Record<number,string>={21:"5.0",22:"5.1",23:"6.0",24:"7.0",25:"7.1",26:"8.0",27:"8.1",28:"9",29:"10",30:"11",31:"12",32:"12L",33:"13",34:"14",35:"15",36:"16",37:"17"};
     return "Android "+(map[sdk]||("API "+sdk))+"+";
   }
+  function buildApkDescriptions(meta:any,name:string,version:string,minSdk:number,file:File){
+    const pkg=String(meta?.packageName||meta?.application?.packageName||"").trim();
+    const permissionsRaw=meta?.usesPermissions||meta?.permissions||meta?.usesPermission||[];
+    const permissions=Array.isArray(permissionsRaw)?permissionsRaw.map((p:any)=>String(p?.name||p||"").toUpperCase()):[];
+    const capabilityMap:[string,string][]=[
+      ["CAMERA","kamera"],["RECORD_AUDIO","mikrofon/audio"],["ACCESS_FINE_LOCATION","lokasi"],
+      ["ACCESS_COARSE_LOCATION","lokasi"],["READ_CONTACTS","kontak"],["READ_MEDIA_IMAGES","gambar/media"],
+      ["READ_EXTERNAL_STORAGE","penyimpanan perangkat"],["WRITE_EXTERNAL_STORAGE","penyimpanan perangkat"],
+      ["INTERNET","akses internet"],["BLUETOOTH","Bluetooth"],["BLUETOOTH_CONNECT","Bluetooth"],
+      ["POST_NOTIFICATIONS","notifikasi"]
+    ];
+    const capabilities=Array.from(new Set(capabilityMap.filter(([key])=>permissions.some(p=>p.includes(key))).map(([,label])=>label)));
+    const capabilityText=capabilities.length?" APK ini meminta akses terkait "+capabilities.join(", ")+".":"";
+    const packageText=pkg?" Package Android: "+pkg+".":"";
+    const size=(file.size/1024/1024).toFixed(2)+" MB";
+    const short=name+" adalah aplikasi Android yang terdeteksi otomatis dari file APK yang kamu masukkan. Versi "+version+", ukuran "+size+", dengan minimum "+sdkName(minSdk)+"."+capabilityText;
+    const full=name+" merupakan aplikasi Android yang sedang dikelola melalui Lara Studio. Metadata dasar dibaca langsung dari APK sehingga informasi halaman tetap mengikuti file yang diunggah. Versi yang terdeteksi: "+version+"; ukuran APK: "+size+"; minimum Android: "+sdkName(minSdk)+"."+packageText+capabilityText+" Deskripsi ini dibuat otomatis dari metadata APK dan dapat kamu sesuaikan sebelum aplikasi dipublikasikan.";
+    return {short,full};
+  }
+
   async function inspectApk(file:File){
     if(!file.name.toLowerCase().endsWith(".apk")) return flash(false,"File harus APK.");
     setBusy(true);
@@ -68,8 +88,9 @@ export default function App(){
       const name=String(rawName);
       const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
       const minSdk=Number(meta?.minSdkVersion||meta?.minSdk||meta?.usesSdk?.minSdkVersion||0);
+      const descriptions=buildApkDescriptions(meta,name,version,minSdk,file);
       setNewApkFile(file); setNewApkVersionCode(Number(meta?.versionCode)||null);
-      setForm(x=>{const pageSlug=x.page_slug||slug;return {...x,name,version,size:(file.size/1024/1024).toFixed(2)+" MB",android:sdkName(minSdk),sha256:sha,page_slug:pageSlug,download_url:publicAppUrl(pageSlug),icon_url:iconUrl};});
+      setForm(x=>{const pageSlug=x.page_slug||slug;return {...x,name,version,size:(file.size/1024/1024).toFixed(2)+" MB",android:sdkName(minSdk),sha256:sha,page_slug:pageSlug,download_url:publicAppUrl(pageSlug),icon_url:iconUrl,short_description:descriptions.short,description:descriptions.full};});
       flash(true,iconUrl?"APK terbaca lengkap: metadata, SHA-256, dan icon otomatis.":"APK terbaca: metadata dan SHA-256 otomatis.");
     }catch(e:any){ flash(false,e?.message||"APK tidak dapat dibaca. Pastikan file APK valid."); }
     finally{ setBusy(false); }
