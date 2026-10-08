@@ -345,7 +345,7 @@ export default function App(){
         updated_at:new Date().toISOString()
       }).eq("id",selected.id);
       if(verifyError) return flash(false,"Verifikasi APK gagal: "+verifyError.message);
-      selected={...selected,verified:true,download_url:expectedUrl};
+      setSelected({...selected,verified:true,download_url:expectedUrl});
     }
     setBusy(true);
     let promoted=false;
