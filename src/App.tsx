@@ -73,8 +73,13 @@ export default function App(){
     finally{ setBusy(false); }
   }
   function newApp(){
-    setSelected(null); setForm({...emptyForm}); setFeatures([]); setReleases([]); setNewApkFile(null); setCreating(true); setView("apps");
-    requestAnimationFrame(()=>requestAnimationFrame(()=>document.getElementById("new-apk-input")?.click()));
+    setSelected(null);
+    setForm({...emptyForm});
+    setFeatures([]);
+    setReleases([]);
+    setNewApkFile(null);
+    setCreating(true);
+    setView("apps");
   }
   async function saveApp(){
     if(busy) return;
