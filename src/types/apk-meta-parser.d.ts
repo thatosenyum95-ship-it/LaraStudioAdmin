@@ -1,0 +1,1 @@
+declare module "apk-meta-parser" {\n  export function parseApkMeta(file: File, options?: Record<string, unknown>): Promise<any>;\n}\n
