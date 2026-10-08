@@ -10,6 +10,7 @@ type AppRow = {
   updated_at:string;
 };
 type Feature={id:string;app_id:string;title:string;description:string|null;icon:string|null;sort_order:number};
+type Media={id:string;app_id:string;kind:string;storage_path:string;alt_text:string|null;sort_order:number};
 type Release={id:string;app_id:string;version:string;version_code:number|null;apk_path:string|null;apk_size_bytes:number|null;sha256:string|null;min_android:string|null;architectures:string[]|null;release_notes:string|null;is_current:boolean;status:"draft"|"published"|"archived"};
 
 type AppForm={name:string;category:string;short_description:string;description:string;developer:string;page_slug:string;version:string;size:string;android:string;sha256:string;download_url:string;icon_url:string;official:boolean;status:"draft"|"published"|"archived"};
@@ -24,7 +25,7 @@ export default function App(){
   const [loginError,setLoginError]=useState(""); const [busy,setBusy]=useState(false);
   const [apps,setApps]=useState<AppRow[]>([]); const [selected,setSelected]=useState<AppRow|null>(null);
   const [form,setForm]=useState(emptyForm); const [features,setFeatures]=useState<Feature[]>([]);
-  const [releases,setReleases]=useState<Release[]>([]); const [query,setQuery]=useState("");
+  const [releases,setReleases]=useState<Release[]>([]); const [media,setMedia]=useState<Media[]>([]); const [query,setQuery]=useState("");
   const [creating,setCreating]=useState(false); const [newApkFile,setNewApkFile]=useState<File|null>(null); const [newApkVersionCode,setNewApkVersionCode]=useState<number|null>(null);
   const [notice,setNotice]=useState<{ok:boolean;text:string}|null>(null); const [view,setView]=useState<"dashboard"|"apps">("dashboard");
 
@@ -38,13 +39,14 @@ export default function App(){
   function flash(ok:boolean,text:string){setNotice({ok,text});setTimeout(()=>setNotice(null),3500)}
   function selectApp(a:AppRow){setCreating(false);setNewApkFile(null);setNewApkVersionCode(null);setSelected(a);setForm({name:a.name,category:a.category||"",short_description:a.short_description||"",description:a.description||"",developer:a.developer||"",page_slug:a.page_slug||"",version:a.version||"1.0.0",size:a.size||"",android:a.android||"",sha256:a.sha256||"",download_url:publicAppUrl(a.page_slug||a.id)||"",official:a.official,status:a.status}); loadDetails(a.id);}
   async function loadDetails(id:string){
-    const [f,r]=await Promise.all([
+    const [f,r,m]=await Promise.all([
       supabase.from("app_features").select("*").eq("app_id",id).order("sort_order"),
-      supabase.from("app_releases").select("*").eq("app_id",id).order("created_at",{ascending:false})
+      supabase.from("app_releases").select("*").eq("app_id",id).order("created_at",{ascending:false}),
+      supabase.from("app_media").select("*").eq("app_id",id).order("sort_order")
     ]);
-    if(f.error || r.error){ flash(false, f.error?.message || r.error?.message || "Gagal memuat detail aplikasi."); return; }
+    if(f.error || r.error || m.error){ flash(false, f.error?.message || r.error?.message || m.error?.message || "Gagal memuat detail aplikasi."); return; }
     setFeatures((f.data||[]) as Feature[]);
-    setReleases((r.data||[]) as Release[]);
+    setReleases((r.data||[]) as Release[]); setMedia((m.data||[]) as Media[]);
   }
   function sdkName(sdk?:number){
     if(!sdk) return "Android";
@@ -285,6 +287,41 @@ export default function App(){
       setBusy(false);
     }
   }
+  async function uploadMedia(files:FileList|null){
+    if(busy) return;
+    if(!selected) return flash(false,"Simpan aplikasi dulu.");
+    const list=Array.from(files||[]).filter(f=>f.type.startsWith("image/"));
+    if(!list.length) return flash(false,"Pilih gambar screenshot terlebih dahulu.");
+    setBusy(true);
+    try{
+      let order=media.filter(x=>x.kind==="screenshot").length+1;
+      for(const file of list){
+        const ext=(file.name.split(".").pop()||"jpg").toLowerCase();
+        const path="apps/"+selected.id+"/screenshots/"+Date.now()+"-"+order+"."+ext;
+        const {error:upError}=await supabase.storage.from("lara-app-media").upload(path,file,{upsert:true,contentType:file.type});
+        if(upError) throw upError;
+        const {data,error:dbError}=await supabase.from("app_media").insert({app_id:selected.id,kind:"screenshot",storage_path:path,alt_text:selected.name+" screenshot "+order,sort_order:order}).select().single();
+        if(dbError) throw dbError;
+        setMedia(prev=>[...prev,db as Media]); order++;
+      }
+      flash(true,list.length+" screenshot berhasil ditambahkan.");
+    }catch(e:any){ flash(false,e?.message||"Gagal mengunggah screenshot."); }
+    finally{ setBusy(false); }
+  }
+  async function removeMedia(item:Media){
+    if(busy || !selected || item.kind!=="screenshot") return;
+    if(!confirm("Hapus screenshot ini?")) return;
+    setBusy(true);
+    try{
+      const {error:storageError}=await supabase.storage.from("lara-app-media").remove([item.storage_path]);
+      if(storageError) throw storageError;
+      const {error}=await supabase.from("app_media").delete().eq("id",item.id).eq("app_id",selected.id);
+      if(error) throw error;
+      setMedia(prev=>prev.filter(x=>x.id!==item.id));
+      flash(true,"Screenshot dihapus.");
+    }catch(e:any){ flash(false,e?.message||"Gagal menghapus screenshot."); }
+    finally{ setBusy(false); }
+  }
   async function unpublish(){
     if(busy) return;
     if(!selected || selected.status!=="published") return;
@@ -348,14 +385,14 @@ export default function App(){
       {view==="dashboard" ? <Dashboard apps={apps} onNew={newApp} onSelect={(a)=>{selectApp(a);setView("apps")}}/> :
       <div className="content-grid"><section className="panel"><div className="panel-head"><div><b>Aplikasi</b><span>{apps.length} item</span></div><button type="button" className="primary" onClick={newApp}><Plus size={17}/>Tambah aplikasi</button></div><div className="search"><Search size={17}/><input placeholder="Cari aplikasi..." value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="app-list">{filtered.map(a=><button key={a.id} className={selected?.id===a.id?"app-row selected":"app-row"} onClick={()=>selectApp(a)}><div className="app-icon">{a.icon_url?<img src={a.icon_url}/>:<Package/>}</div><div className="app-meta"><b>{a.name}</b><span>{a.version||"—"} · {a.category||"Uncategorized"}</span></div><span className={"pill "+a.status}>{a.status}</span>{a.official&&<span className="official">OFFICIAL</span>}</button>)}</div></section>
       <section className="panel editor">{selected||creating ? <><div className="panel-head"><div><b>{selected?"Edit Aplikasi":"Aplikasi Baru"}</b><span>{selected?.id||"Belum disimpan"}</span></div>{selected&&<button className="danger" onClick={deleteApp}><Archive size={16}/></button>}</div>
-        <div className="form-grid"><label className="full">Pilih file APK — metadata otomatis<label className="upload primary" style={{width:"fit-content"}}><Upload size={16}/>Pilih APK<input id="new-apk-input" type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)inspectApk(f);e.currentTarget.value=""}}/></label><small>Nama, versi, ukuran, minimum Android, SHA-256, dan icon dibaca langsung dari APK.</small>{form.icon_url&&<img className="preview-icon" src={form.icon_url}/>} </label>{[["name","Nama aplikasi"],["developer","Developer / publisher"],["category","Kategori"],["version","Versi"],["size","Ukuran APK"],["android","Minimum Android"],["page_slug","Slug halaman"],["download_url","URL download"]].map(([k,l])=><label key={k}>{l}<input value={(form as any)[k]} onChange={e=>setForm({...form,[k]:e.target.value})}/></label>)}
-        <label className="full">Deskripsi singkat<textarea rows={2} value={form.short_description} onChange={e=>setForm({...form,short_description:e.target.value})}/></label><label className="full">Deskripsi lengkap<textarea rows={6} value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><label className="full">SHA-256<input value={form.sha256} onChange={e=>setForm({...form,sha256:e.target.value})}/></label></div>
+        <div className="form-grid"><label className="full">Pilih file APK — metadata otomatis<label className="upload primary" style={{width:"fit-content"}}><Upload size={16}/>Pilih APK<input id="new-apk-input" type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)inspectApk(f);e.currentTarget.value=""}}/></label><small>Nama, versi, ukuran, minimum Android, SHA-256, dan icon dibaca langsung dari APK.</small>{form.icon_url&&<img className="preview-icon" src={form.icon_url}/>} </label>{[["name","Nama aplikasi"],["developer","Developer / publisher"],["category","Kategori"],["version","Versi"],["size","Ukuran APK"],["android","Minimum Android"],["page_slug","Slug halaman"]].map(([k,l])=><label key={k}>{l}<input value={(form as any)[k]} onChange={e=>setForm({...form,[k]:e.target.value})}/></label>)}
+        <label className="full">Halaman Publik Lara Studio<input value={publicAppUrl(form.page_slug.trim())} readOnly/></label><label className="full">Deskripsi singkat<textarea rows={2} value={form.short_description} onChange={e=>setForm({...form,short_description:e.target.value})}/></label><label className="full">Deskripsi lengkap<textarea rows={6} value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><label className="full">SHA-256<input value={form.sha256} onChange={e=>setForm({...form,sha256:e.target.value})}/></label></div>
         <div className="toggles"><label><input type="checkbox" checked={selected?.official||false} disabled/> Official</label><label>Status<select value={selected?.status||"draft"} disabled><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label></div>
         <div className="actions"><button className="primary" onClick={saveApp} disabled={busy}>{busy?"Menyimpan...":creating?"Simpan aplikasi":"Simpan perubahan"}</button>{selected?.status==="published"
   ? <button className="ghost" onClick={unpublish} disabled={busy}>Batalkan publish</button>
   : <button className="publish" onClick={publish} disabled={busy}><ShieldCheck size={16}/>Verifikasi & Publish</button>}</div>
         {selected&&<><div className="subpanel"><div className="subhead"><b>Icon aplikasi</b><label className="upload"><Upload size={16}/>Upload icon<input type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadIcon(f);e.currentTarget.value=""}}/></label></div>{selected.icon_url&&<img className="preview-icon" src={selected.icon_url}/>}</div>
-        <div className="subpanel"><div className="subhead"><b>Fitur aplikasi</b><button className="ghost small" onClick={addFeature}><Plus size={15}/>Tambah</button></div>{features.map(f=><div className="feature-row" key={f.id}><span>{f.title}</span><button onClick={()=>removeFeature(f.id)}><X size={15}/></button></div>)}{!features.length&&<small>Belum ada fitur.</small>}</div>
+        <div className="subpanel"><div className="subhead"><b>Screenshot aplikasi</b><label className="upload"><Upload size={16}/>Upload screenshot<input type="file" accept="image/*" multiple onChange={e=>{uploadMedia(e.target.files);e.currentTarget.value=""}}/></label></div>{media.filter(x=>x.kind==="screenshot").length?<div className="media-grid">{media.filter(x=>x.kind==="screenshot").map(x=><div className="media-card" key={x.id}><img src={supabase.storage.from("lara-app-media").getPublicUrl(x.storage_path).data.publicUrl} alt={x.alt_text||"Screenshot"}/><button className="danger small" onClick={()=>removeMedia(x)}>Hapus</button></div>)}</div>:<small>Belum ada screenshot. Jika otomatis belum tersedia, upload beberapa screenshot sekaligus di sini.</small></div><div className="subpanel"><div className="subhead"><b>Fitur aplikasi</b><button className="ghost small" onClick={addFeature}><Plus size={15}/>Tambah</button></div>{features.map(f=><div className="feature-row" key={f.id}><span>{f.title}</span><button onClick={()=>removeFeature(f.id)}><X size={15}/></button></div>)}{!features.length&&<small>Belum ada fitur.</small>}</div>
         <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)uploadApk(f);e.currentTarget.value=""}}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:<div style={{display:"flex",gap:8,alignItems:"center"}}><button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button><button className="danger small" onClick={()=>deleteRelease(r)} disabled={busy}>Hapus</button></div>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah aplikasi</button></div>}</section></div>}
     </main>
   </div>
