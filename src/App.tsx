@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { parseApkMeta } from "apk-meta-parser";
 import { supabase } from "./lib/supabase";
 import { LayoutDashboard, Package, Plus, LogOut, ShieldCheck, Search, Pencil, Archive, Upload, X, CheckCircle2, AlertCircle, RefreshCw } from "lucide-react";
 
@@ -114,7 +113,7 @@ export default function App(){
     setBusy(true);
     try{
       const buffer=await file.arrayBuffer();
-      const meta:any=await parseApkMeta(file,{skipMd5:true,partial:true});
+      const parser=(window as any).AppInfoParser;\n      if(!parser) throw new Error("Parser APK belum tersedia. Muat ulang halaman Admin.");\n      const meta:any=await new parser(file).parse();
       const hash=await crypto.subtle.digest("SHA-256",buffer);
       const sha=Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
       let iconUrl="";
@@ -124,11 +123,11 @@ export default function App(){
           if(parsed?.icon) iconUrl=String(parsed.icon);
         }catch{}
       }
-      const version=meta.versionName||"1.0.0";
-      const name=meta.label && !meta.labelIsResourceId ? meta.label : (meta.packageName||file.name.replace(/\\.apk$/i,""));
+      const version=meta.versionName||meta.version||"1.0.0";
+      const name=meta.application?.label||meta.label||meta.packageName||file.name.replace(/\\.apk$/i,"");
       const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
       setNewApkFile(file); setNewApkVersionCode(Number(meta.versionCode)||null);
-      setForm(x=>({...x,name,version,size:(file.size/1024/1024).toFixed(2)+" MB",android:sdkName(meta.minSdkVersion),sha256:sha,page_slug:x.page_slug||slug,icon_url:iconUrl}));
+      setForm(x=>({...x,name,version,size:(file.size/1024/1024).toFixed(2)+" MB",android:sdkName(Number(meta.minSdkVersion||meta.minSdk||meta.sdkVersion||meta.usesSdk?.minSdkVersion||0)),sha256:sha,page_slug:x.page_slug||slug,icon_url:iconUrl}));
       flash(true,iconUrl?"APK berhasil dibaca: metadata + SHA-256 + icon otomatis.":"APK berhasil dibaca. Metadata dan SHA-256 otomatis; icon akan dicoba lagi saat penyimpanan.");
     }catch(e:any){
       flash(false,e?.message||"APK tidak dapat dibaca. Pastikan file APK valid.");
