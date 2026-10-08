@@ -352,8 +352,18 @@ export default function App(){
     if(!selected.verified) return flash(false,"Verifikasi aplikasi sebelum publish.");
     if(!releases.some(r=>r.is_current && r.status==="published") && !selected.download_url) return flash(false,"Tetapkan satu release current atau isi URL download terlebih dahulu.");
     setBusy(true);
-    const {error}=await supabase.from("store_apps").update({status:"published",official:true,published_at:new Date().toISOString()}).eq("id",selected.id);
-    if(error)flash(false,error.message);else{flash(true,"Aplikasi dipublikasikan sebagai Official.");await loadApps();setSelected({...selected,status:"published",official:true});}
+    const {error}=await supabase.from("store_apps").update({status:"published",official:true,published_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",selected.id);
+    if(error){flash(false,error.message);setBusy(false);return}
+    const currentRelease=releases.find(r=>r.is_current);
+    if(currentRelease && currentRelease.status!=="published"){
+      const {error:releaseError}=await supabase.from("app_releases").update({status:"published"}).eq("id",currentRelease.id);
+      if(releaseError){flash(false,releaseError.message);setBusy(false);return}
+    }
+    await loadApps();
+    await loadDetails(selected.id);
+    setSelected({...selected,status:"published",official:true});
+    setForm({...form,status:"published",official:true});
+    flash(true,"Aplikasi dipublikasikan sebagai Official beserta release current.");
     setBusy(false);
   }
   async function signIn(e:React.FormEvent){e.preventDefault();setBusy(true);setLoginError("");const {data,error}=await supabase.auth.signInWithPassword({email,password});if(error)setLoginError(error.message);else setSession(data.session);setBusy(false)}
