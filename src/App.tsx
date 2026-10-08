@@ -15,65 +15,9 @@ type Release={id:string;app_id:string;version:string;version_code:number|null;ap
 type AppForm={name:string;category:string;short_description:string;description:string;developer:string;page_slug:string;version:string;size:string;android:string;sha256:string;download_url:string;icon_url:string;official:boolean;status:"draft"|"published"|"archived"};
 
 const emptyForm:AppForm={name:"",category:"Utilities",short_description:"",description:"",developer:"",page_slug:"",version:"1.0.0",size:"",android:"Android 8.0+",sha256:"",download_url:"",icon_url:"",official:false,status:"draft"};
-const PUBLIC_CATALOG_URL="https://thatosenyum95-ship-it.github.io/lara-game-studio/apps.json";
-
-export default function App(){
-  const [session,setSession]=useState<any>(null);
-  const [email,setEmail]=useState(""); const [password,setPassword]=useState("");
-  const [loginError,setLoginError]=useState(""); const [busy,setBusy]=useState(false);
-  const [apps,setApps]=useState<AppRow[]>([]); const [selected,setSelected]=useState<AppRow|null>(null);
-  const [form,setForm]=useState(emptyForm); const [features,setFeatures]=useState<Feature[]>([]);
-  const [releases,setReleases]=useState<Release[]>([]); const [query,setQuery]=useState(""); const [creating,setCreating]=useState(false); const [newApkFile,setNewApkFile]=useState<File|null>(null); const [newApkVersionCode,setNewApkVersionCode]=useState<number|null>(null);
-  const [notice,setNotice]=useState<{ok:boolean;text:string}|null>(null); const [view,setView]=useState<"dashboard"|"apps">("dashboard");
-
-  useEffect(()=>{ supabase.auth.getSession().then(({data})=>setSession(data.session)); const {data}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s)); return()=>data.subscription.unsubscribe(); },[]);
-  useEffect(()=>{ if(session && session.user?.app_metadata?.is_admin===true) loadApps(); },[session]);
-
-  async function syncPublicCatalog(){
-    const response=await fetch(PUBLIC_CATALOG_URL+"?sync="+Date.now(),{cache:"no-store"});
-    if(!response.ok) throw new Error("Katalog Lara Studio tidak dapat dibaca.");
-    const catalog=await response.json();
-    if(!Array.isArray(catalog)) return;
-    const published=catalog.filter((a:any)=>a && (a.official===true || String(a.status||"").toLowerCase()==="tersedia"));
-    for(const a of published){
-      if(!a.id || !a.name) continue;
-      const pageSlug=String(a.page||"").replace(/^apps\\//,"").replace(/\\.html$/,"") || String(a.id);
-      const payload={
-        id:String(a.id), name:String(a.name), category:a.category||"Utilities",
-        version:a.version||"1.0.0", size:a.size||null, android:a.android||null,
-        sha256:a.sha256||null, verified:a.verified!==false, download_url:a.downloadUrl||null,
-        short_description:a.shortDescription||null, description:a.description||null,
-        developer:a.developer||"Lara Studio", icon_url:a.iconUrl||null,
-        page_slug:pageSlug, official:true, status:"published",
-        published_at:new Date().toISOString(), updated_at:new Date().toISOString()
-      };
-      const {error}=await supabase.from("store_apps").upsert(payload,{onConflict:"id"});
-      if(error) throw error;
-      const {data:current,error:currentError}=await supabase.from("app_releases").select("*").eq("app_id",String(a.id)).eq("is_current",true).limit(1);
-      if(currentError) throw currentError;
-      const currentRelease=(current||[])[0] as Release|undefined;
-      if(!currentRelease || currentRelease.version!==String(a.version||"1.0.0")){
-        if(currentRelease) {
-          const {error:e}=await supabase.from("app_releases").update({is_current:false}).eq("id",currentRelease.id);
-          if(e) throw e;
-        }
-        const {error:e}=await supabase.from("app_releases").insert({
-          app_id:String(a.id),version:String(a.version||"1.0.0"),version_code:null,
-          apk_path:a.downloadUrl||("external://"+String(a.id)),apk_size_bytes:null,sha256:a.sha256||null,min_android:a.android||null,
-          architectures:[],release_notes:"Diimpor otomatis dari Lara Studio publik.",
-          is_current:true,status:"published"
-        });
-        if(e) throw e;
-      } else if(currentRelease.status!=="published"){
-        const {error:e}=await supabase.from("app_releases").update({status:"published",sha256:a.sha256||currentRelease.sha256,min_android:a.android||currentRelease.min_android}).eq("id",currentRelease.id);
-        if(e) throw e;
-      }
-    }
-  }
   async function loadApps(){
     setBusy(true);
     try {
-      await syncPublicCatalog();
       const {data,error}=await supabase.from("store_apps").select("*").order("updated_at",{ascending:false});
       if(error) throw error;
       setApps((data||[]) as AppRow[]);
