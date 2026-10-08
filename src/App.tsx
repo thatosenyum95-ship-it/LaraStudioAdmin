@@ -23,7 +23,7 @@ export default function App(){
   const [loginError,setLoginError]=useState(""); const [busy,setBusy]=useState(false);
   const [apps,setApps]=useState<AppRow[]>([]); const [selected,setSelected]=useState<AppRow|null>(null);
   const [form,setForm]=useState(emptyForm); const [features,setFeatures]=useState<Feature[]>([]);
-  const [releases,setReleases]=useState<Release[]>([]); const [query,setQuery]=useState("");
+  const [releases,setReleases]=useState<Release[]>([]); const [query,setQuery]=useState(""); const [creating,setCreating]=useState(false);
   const [notice,setNotice]=useState<{ok:boolean;text:string}|null>(null); const [view,setView]=useState<"dashboard"|"apps">("dashboard");
 
   useEffect(()=>{ supabase.auth.getSession().then(({data})=>setSession(data.session)); const {data}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s)); return()=>data.subscription.unsubscribe(); },[]);
@@ -94,7 +94,17 @@ export default function App(){
     setFeatures((f.data||[]) as Feature[]);
     setReleases((r.data||[]) as Release[]);
   }
-  function newApp(){setSelected(null);setForm(emptyForm);setFeatures([]);setReleases([]);setView("apps")}
+  function newApp(){setSelected(null);setForm(emptyForm);setFeatures([]);setReleases([]);setCreating(true);setView("apps")}
+  async function calculateSha(file:File){
+    if(!file.name.toLowerCase().endsWith(".apk")) return flash(false,"File harus APK.");
+    try {
+      const buffer=await file.arrayBuffer();
+      const hash=await crypto.subtle.digest("SHA-256",buffer);
+      const sha=Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
+      setForm(f=>({...f,sha256:sha,size:(file.size/1024/1024).toFixed(2)+" MB"}));
+      flash(true,"SHA-256 APK berhasil dihitung otomatis.");
+    } catch(e:any) { flash(false,e?.message||"Gagal menghitung SHA-256."); }
+  }
   async function saveApp(){
     if(busy) return;
     if(!form.name.trim()) return flash(false,"Nama aplikasi wajib diisi.");
@@ -107,7 +117,7 @@ export default function App(){
     const q=selected ? supabase.from("store_apps").update(payload).eq("id",selected.id).select().single() : supabase.from("store_apps").insert(payload).select().single();
     const {data,error}=await q;
     if(error){flash(false,error.message);setBusy(false);return}
-    setSelected(data as AppRow); await loadApps(); flash(true,selected?"Aplikasi diperbarui.":"Aplikasi dibuat sebagai draft."); setBusy(false);
+    setSelected(data as AppRow); setCreating(false); await loadApps(); flash(true,selected?"Aplikasi diperbarui.":"Aplikasi dibuat sebagai draft. SHA-256 akan terisi otomatis saat APK dipilih."); setBusy(false);
   }
   async function deleteApp(){
     if(!selected || !confirm("Arsipkan aplikasi ini? Data dan histori rilis akan tetap aman.")) return;
@@ -258,8 +268,8 @@ export default function App(){
       {notice&&<div className={notice.ok?"notice ok":"notice"}>{notice.ok?<CheckCircle2/>:<AlertCircle/>}{notice.text}</div>}
       {view==="dashboard" ? <Dashboard apps={apps} onNew={newApp} onSelect={(a)=>{selectApp(a);setView("apps")}}/> :
       <div className="content-grid"><section className="panel"><div className="panel-head"><div><b>Aplikasi</b><span>{apps.length} item</span></div><button className="primary" onClick={newApp}><Plus size={17}/>Tambah aplikasi</button></div><div className="search"><Search size={17}/><input placeholder="Cari aplikasi..." value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="app-list">{filtered.map(a=><button key={a.id} className={selected?.id===a.id?"app-row selected":"app-row"} onClick={()=>selectApp(a)}><div className="app-icon">{a.icon_url?<img src={a.icon_url}/>:<Package/>}</div><div className="app-meta"><b>{a.name}</b><span>{a.version||"—"} · {a.category||"Uncategorized"}</span></div><span className={"pill "+a.status}>{a.status}</span>{a.official&&<span className="official">OFFICIAL</span>}</button>)}</div></section>
-      <section className="panel editor">{selected||form.name ? <><div className="panel-head"><div><b>{selected?"Edit Aplikasi":"Aplikasi Baru"}</b><span>{selected?.id||"Belum disimpan"}</span></div>{selected&&<button className="danger" onClick={deleteApp}><Archive size={16}/></button>}</div>
-        <div className="form-grid">{[["name","Nama aplikasi"],["developer","Developer / publisher"],["category","Kategori"],["version","Versi"],["size","Ukuran APK"],["android","Minimum Android"],["page_slug","Slug halaman"],["download_url","URL download"]].map(([k,l])=><label key={k}>{l}<input value={(form as any)[k]} onChange={e=>setForm({...form,[k]:e.target.value})}/></label>)}
+      <section className="panel editor">{selected||creating ? <><div className="panel-head"><div><b>{selected?"Edit Aplikasi":"Aplikasi Baru"}</b><span>{selected?.id||"Belum disimpan"}</span></div>{selected&&<button className="danger" onClick={deleteApp}><Archive size={16}/></button>}</div>
+        <div className="form-grid">{[["name","Nama aplikasi"],["developer","Developer / publisher"],["category","Kategori"],["version","Versi"],["size","Ukuran APK"],["android","Minimum Android"],["page_slug","Slug halaman"],["download_url","URL download"]].map(([k,l])=><label key={k}>{l}<input value={(form as any)[k]} onChange={e=>setForm({...form,[k]:e.target.value})}/></label>)}<label className="full">Pilih APK untuk menghitung SHA-256 otomatis<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)calculateSha(f);e.currentTarget.value=""}}/><small>File hanya dipakai untuk menghitung SHA-256 di perangkat. Upload ke penyimpanan dilakukan setelah aplikasi disimpan.</small></label>
         <label className="full">Deskripsi singkat<textarea rows={2} value={form.short_description} onChange={e=>setForm({...form,short_description:e.target.value})}/></label><label className="full">Deskripsi lengkap<textarea rows={6} value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><label className="full">SHA-256<input value={form.sha256} onChange={e=>setForm({...form,sha256:e.target.value})}/></label></div>
         <div className="toggles"><label><input type="checkbox" checked={selected?.official||false} disabled/> Official</label><label>Status<select value={selected?.status||"draft"} disabled><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label></div>
         <div className="actions"><button className="primary" onClick={saveApp} disabled={busy}>{busy?"Menyimpan...":"Simpan perubahan"}</button>{selected?.status==="published"
