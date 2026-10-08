@@ -12,7 +12,9 @@ type AppRow = {
 type Feature={id:string;app_id:string;title:string;description:string|null;icon:string|null;sort_order:number};
 type Release={id:string;app_id:string;version:string;version_code:number|null;apk_path:string|null;apk_size_bytes:number|null;sha256:string|null;min_android:string|null;architectures:string[]|null;release_notes:string|null;is_current:boolean;status:"draft"|"published"|"archived"};
 
-const emptyForm={name:"",category:"Utilities",short_description:"",description:"",developer:"",page_slug:"",version:"1.0.0",size:"",android:"Android 8.0+",sha256:"",download_url:"",official:false,status:"draft" as const};
+type AppForm={name:string;category:string;short_description:string;description:string;developer:string;page_slug:string;version:string;size:string;android:string;sha256:string;download_url:string;official:boolean;status:"draft"|"published"|"archived"};
+
+const emptyForm:AppForm={name:"",category:"Utilities",short_description:"",description:"",developer:"",page_slug:"",version:"1.0.0",size:"",android:"Android 8.0+",sha256:"",download_url:"",official:false,status:"draft"};
 
 export default function App(){
   const [session,setSession]=useState<any>(null);
