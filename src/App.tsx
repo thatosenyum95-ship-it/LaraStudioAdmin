@@ -59,7 +59,7 @@ export default function App(){
         }
         const {error:e}=await supabase.from("app_releases").insert({
           app_id:String(a.id),version:String(a.version||"1.0.0"),version_code:null,
-          apk_path:null,apk_size_bytes:null,sha256:a.sha256||null,min_android:a.android||null,
+          apk_path:a.downloadUrl||("external://"+String(a.id)),apk_size_bytes:null,sha256:a.sha256||null,min_android:a.android||null,
           architectures:[],release_notes:"Diimpor otomatis dari Lara Studio publik.",
           is_current:true,status:"published"
         });
@@ -169,7 +169,7 @@ export default function App(){
   }
   async function makeCurrentRelease(r:Release){
     if(!selected)return;
-    if(!r.apk_path) return flash(false,"Release ini belum memiliki file APK.");
+    if(!r.apk_path && !selected.download_url) return flash(false,"Release ini belum memiliki file APK.");
     if(r.is_current) return;
     if(!confirm("Jadikan v"+r.version+" sebagai release current?")) return;
     setBusy(true);
@@ -181,7 +181,7 @@ export default function App(){
       if(previous) await supabase.from("app_releases").update({is_current:true,status:previous.status}).eq("id",previous.id);
       flash(false,error.message);setBusy(false);return
     }
-    const publicUrl=r.apk_path ? supabase.storage.from("lara-apks").getPublicUrl(r.apk_path).data.publicUrl : null;
+    const publicUrl=r.apk_path?.startsWith("http") ? r.apk_path : (r.apk_path ? supabase.storage.from("lara-apks").getPublicUrl(r.apk_path).data.publicUrl : null);
     const next={version:r.version,size:r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):selected.size,sha256:r.sha256||selected.sha256,download_url:publicUrl||selected.download_url,updated_at:new Date().toISOString(),verified:true};
     const {error:appError}=await supabase.from("store_apps").update(next).eq("id",selected.id);
     if(appError){flash(false,appError.message);setBusy(false);return}
