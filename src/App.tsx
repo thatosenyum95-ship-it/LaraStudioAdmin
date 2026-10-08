@@ -36,7 +36,7 @@ export default function App(){
     if(error) flash(false,error.message); else setApps((data||[]) as AppRow[]); setBusy(false);
   }
   function flash(ok:boolean,text:string){setNotice({ok,text});setTimeout(()=>setNotice(null),3500)}
-  function selectApp(a:AppRow){setCreating(false);setNewApkFile(null);setNewApkVersionCode(null);setSelected(a);setForm({name:a.name,category:a.category||"",short_description:a.short_description||"",description:a.description||"",developer:a.developer||"",page_slug:a.page_slug||"",version:a.version||"1.0.0",size:a.size||"",android:a.android||"",sha256:a.sha256||"",download_url:a.download_url||"",official:a.official,status:a.status}); loadDetails(a.id);}
+  function selectApp(a:AppRow){setCreating(false);setNewApkFile(null);setNewApkVersionCode(null);setSelected(a);setForm({name:a.name,category:a.category||"",short_description:a.short_description||"",description:a.description||"",developer:a.developer||"",page_slug:a.page_slug||"",version:a.version||"1.0.0",size:a.size||"",android:a.android||"",sha256:a.sha256||"",download_url:publicAppUrl(a.page_slug||a.id)||"",official:a.official,status:a.status}); loadDetails(a.id);}
   async function loadDetails(id:string){
     const [f,r]=await Promise.all([
       supabase.from("app_features").select("*").eq("app_id",id).order("sort_order"),
@@ -139,7 +139,7 @@ export default function App(){
       const slug=form.page_slug.trim()||form.name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
       if(!slug) throw new Error("Slug aplikasi tidak valid.");
       const appId=isNew?slug:selected!.id;
-      const payload={id:appId,name:form.name.trim(),category:form.category.trim()||"Utilities",short_description:form.short_description.trim()||null,description:form.description.trim()||null,developer:form.developer.trim()||"Lara Studio",page_slug:slug,version:form.version.trim()||"1.0.0",size:form.size.trim()||null,android:form.android.trim()||null,sha256:form.sha256.trim()||null,download_url:form.download_url.trim()||"",icon_url:form.icon_url.trim()||null,official:false,status:"draft",published_at:null,updated_at:new Date().toISOString()};
+      const payload={id:appId,name:form.name.trim(),category:form.category.trim()||"Utilities",short_description:form.short_description.trim()||null,description:form.description.trim()||null,developer:form.developer.trim()||"Lara Studio",page_slug:slug,version:form.version.trim()||"1.0.0",size:form.size.trim()||null,android:form.android.trim()||null,sha256:form.sha256.trim()||null,download_url:publicAppUrl(slug)||"",icon_url:form.icon_url.trim()||null,official:false,status:"draft",published_at:null,updated_at:new Date().toISOString()};
       const q=selected?supabase.from("store_apps").update(payload).eq("id",selected.id).select().single():supabase.from("store_apps").insert(payload).select().single();
       const {data,error}=await q; if(error) throw error;
       let saved=data as AppRow;
@@ -249,7 +249,7 @@ export default function App(){
     const next={version:r.version,size:r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):selected.size,sha256:r.sha256||selected.sha256,download_url:publicAppUrl(selected.page_slug||selected.id)||selected.download_url,updated_at:new Date().toISOString(),verified:true};
     const {error:appError}=await supabase.from("store_apps").update(next).eq("id",selected.id);
     if(appError){flash(false,appError.message);setBusy(false);return}
-    const updated={...selected,...next};
+    const updated={...selected,...next,verified:true};
     setSelected(updated);
     setForm({...form,version:next.version,size:next.size||"",sha256:next.sha256||"",download_url:next.download_url||""});
     await loadApps(); await loadDetails(selected.id);
@@ -298,9 +298,18 @@ export default function App(){
   async function publish(){
     if(busy) return;
     if(!selected)return;
-    if(!selected.verified) return flash(false,"Verifikasi aplikasi sebelum publish.");
     const currentRelease=releases.find(r=>r.is_current);
-    if(!currentRelease && !selected.download_url) return flash(false,"Tetapkan release current atau URL download terlebih dahulu.");
+    if(!currentRelease || !currentRelease.apk_path) return flash(false,"Tetapkan release current yang memiliki file APK terlebih dahulu.");
+    if(!selected.verified){
+      const expectedUrl=publicAppUrl(selected.page_slug||selected.id);
+      const {error:verifyError}=await supabase.from("store_apps").update({
+        verified:true,
+        download_url:expectedUrl,
+        updated_at:new Date().toISOString()
+      }).eq("id",selected.id);
+      if(verifyError) return flash(false,"Verifikasi APK gagal: "+verifyError.message);
+      selected={...selected,verified:true,download_url:expectedUrl};
+    }
     setBusy(true);
     let promoted=false;
     try{
@@ -309,7 +318,8 @@ export default function App(){
         if(releaseError) throw releaseError;
         promoted=true;
       }
-      const {error}=await supabase.from("store_apps").update({status:"published",official:true,published_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",selected.id);
+      const publicUrl=publicAppUrl(selected.page_slug||selected.id);
+      const {error}=await supabase.from("store_apps").update({status:"published",official:true,verified:true,download_url:publicUrl,published_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",selected.id);
       if(error) throw error;
       await loadApps(); await loadDetails(selected.id);
       setSelected({...selected,status:"published",official:true});
