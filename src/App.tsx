@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./lib/supabase";
-import { LayoutDashboard, Package, Plus, LogOut, ShieldCheck, Search, Pencil, Trash2, Upload, X, CheckCircle2, AlertCircle, RefreshCw } from "lucide-react";
+import { LayoutDashboard, Package, Plus, LogOut, ShieldCheck, Search, Pencil, Archive, Upload, X, CheckCircle2, AlertCircle, RefreshCw } from "lucide-react";
 
 type AppRow = {
   id:string; name:string; category:string|null; version:string|null; size:string|null; android:string|null;
@@ -26,7 +26,7 @@ export default function App(){
   const [notice,setNotice]=useState<{ok:boolean;text:string}|null>(null); const [view,setView]=useState<"dashboard"|"apps">("dashboard");
 
   useEffect(()=>{ supabase.auth.getSession().then(({data})=>setSession(data.session)); const {data}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s)); return()=>data.subscription.unsubscribe(); },[]);
-  useEffect(()=>{ if(session) loadApps(); },[session]);
+  useEffect(()=>{ if(session && session.user?.app_metadata?.is_admin===true) loadApps(); },[session]);
 
   async function loadApps(){
     setBusy(true); const {data,error}=await supabase.from("store_apps").select("*").order("updated_at",{ascending:false});
@@ -50,9 +50,10 @@ export default function App(){
     setSelected(data as AppRow); await loadApps(); flash(true,selected?"Aplikasi diperbarui.":"Aplikasi dibuat sebagai draft."); setBusy(false);
   }
   async function deleteApp(){
-    if(!selected || !confirm("Hapus aplikasi ini beserta data adminnya?")) return;
-    setBusy(true); const {error}=await supabase.from("store_apps").delete().eq("id",selected.id);
-    if(error) flash(false,error.message); else {flash(true,"Aplikasi dihapus.");setSelected(null);setForm(emptyForm);await loadApps();}
+    if(!selected || !confirm("Arsipkan aplikasi ini? Data dan histori rilis akan tetap aman.")) return;
+    setBusy(true);
+    const {error}=await supabase.from("store_apps").update({status:"archived",updated_at:new Date().toISOString()}).eq("id",selected.id);
+    if(error) flash(false,error.message); else {flash(true,"Aplikasi diarsipkan.");await loadApps();setSelected({...selected,status:"archived"});}
     setBusy(false);
   }
   async function addFeature(){
@@ -87,9 +88,21 @@ export default function App(){
   }
   async function makeCurrentRelease(r:Release){
     if(!selected)return;
-    await supabase.from("app_releases").update({is_current:false}).eq("app_id",selected.id);
+    setBusy(true);
+    const {error:clearError}=await supabase.from("app_releases").update({is_current:false}).eq("app_id",selected.id);
+    if(clearError){flash(false,clearError.message);setBusy(false);return}
     const {error}=await supabase.from("app_releases").update({is_current:true,status:"published"}).eq("id",r.id);
-    if(error)flash(false,error.message);else{flash(true,"Release ditetapkan sebagai current.");await loadDetails(selected.id);}
+    if(error){flash(false,error.message);setBusy(false);return}
+    const publicUrl=r.apk_path ? supabase.storage.from("lara-apks").getPublicUrl(r.apk_path).data.publicUrl : null;
+    const next={version:r.version,size:r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):selected.size,sha256:r.sha256||selected.sha256,download_url:publicUrl||selected.download_url,updated_at:new Date().toISOString(),verified:true};
+    const {error:appError}=await supabase.from("store_apps").update(next).eq("id",selected.id);
+    if(appError){flash(false,appError.message);setBusy(false);return}
+    const updated={...selected,...next};
+    setSelected(updated);
+    setForm({...form,version:next.version,size:next.size||"",sha256:next.sha256||"",download_url:next.download_url||""});
+    await loadApps(); await loadDetails(selected.id);
+    flash(true,"Release v"+r.version+" sekarang menjadi current.");
+    setBusy(false);
   }
   async function uploadIcon(file:File){
     if(!selected)return flash(false,"Simpan aplikasi dulu.");
@@ -103,6 +116,7 @@ export default function App(){
   async function publish(){
     if(!selected)return;
     if(!selected.verified) return flash(false,"Verifikasi aplikasi sebelum publish.");
+    if(!releases.some(r=>r.is_current && r.status==="published")) return flash(false,"Tetapkan satu release current terlebih dahulu.");
     const {error}=await supabase.from("store_apps").update({status:"published",official:true,published_at:new Date().toISOString()}).eq("id",selected.id);
     if(error)flash(false,error.message);else{flash(true,"Aplikasi dipublikasikan sebagai Official.");await loadApps();setSelected({...selected,status:"published",official:true});}
   }
@@ -112,6 +126,8 @@ export default function App(){
 
   if(!session) return <div className="login"><div className="login-card"><div className="brand-mark">LS</div><h1>Lara Studio Admin</h1><p>Panel privat untuk mengelola aplikasi resmi Lara Studio.</p><form onSubmit={signIn}><input type="email" placeholder="Email admin" value={email} onChange={e=>setEmail(e.target.value)} required/><input type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} required/>{loginError&&<div className="error"><AlertCircle size={16}/>{loginError}</div>}<button className="primary wide" disabled={busy}>{busy?"Memeriksa...":"Masuk ke Admin"}</button></form><small>Hanya akun Supabase dengan <b>app_metadata.is_admin=true</b> yang dapat mengelola data.</small></div></div>;
 
+  if(session.user?.app_metadata?.is_admin!==true) return <div className="login"><div className="login-card"><div className="brand-mark">LS</div><h1>Akses ditolak</h1><p>Akun ini belum memiliki hak Admin Lara Studio.</p><button className="primary wide" onClick={signOut}>Keluar</button></div></div>;
+
   return <div className="shell">
     <aside><div className="brand"><div className="brand-mark">LS</div><div><b>Lara Studio</b><span>ADMIN</span></div></div>
       <nav><button className={view==="dashboard"?"active":""} onClick={()=>setView("dashboard")}><LayoutDashboard/>Dashboard</button><button className={view==="apps"?"active":""} onClick={()=>setView("apps")}><Package/>Aplikasi</button></nav>
@@ -120,20 +136,20 @@ export default function App(){
     <main><header><div><h2>{view==="dashboard"?"Dashboard":"Manajemen Aplikasi"}</h2><p>Kelola katalog publik tanpa menyentuh website Lara Studio.</p></div><button className="ghost" onClick={loadApps}><RefreshCw size={17}/>Refresh</button></header>
       {notice&&<div className={notice.ok?"notice ok":"notice"}>{notice.ok?<CheckCircle2/>:<AlertCircle/>}{notice.text}</div>}
       {view==="dashboard" ? <Dashboard apps={apps} onNew={newApp} onSelect={(a)=>{selectApp(a);setView("apps")}}/> :
-      <div className="content-grid"><section className="panel"><div className="panel-head"><div><b>Aplikasi</b><span>{apps.length} item</span></div><button className="primary" onClick={newApp}><Plus size={17}/>Tambah APK</button></div><div className="search"><Search size={17}/><input placeholder="Cari aplikasi..." value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="app-list">{filtered.map(a=><button key={a.id} className={selected?.id===a.id?"app-row selected":"app-row"} onClick={()=>selectApp(a)}><div className="app-icon">{a.icon_url?<img src={a.icon_url}/>:<Package/>}</div><div className="app-meta"><b>{a.name}</b><span>{a.version||"—"} · {a.category||"Uncategorized"}</span></div><span className={"pill "+a.status}>{a.status}</span>{a.official&&<span className="official">OFFICIAL</span>}</button>)}</div></section>
-      <section className="panel editor">{selected||form.name ? <><div className="panel-head"><div><b>{selected?"Edit Aplikasi":"Aplikasi Baru"}</b><span>{selected?.id||"Belum disimpan"}</span></div>{selected&&<button className="danger" onClick={deleteApp}><Trash2 size={16}/></button>}</div>
+      <div className="content-grid"><section className="panel"><div className="panel-head"><div><b>Aplikasi</b><span>{apps.length} item</span></div><button className="primary" onClick={newApp}><Plus size={17}/>Tambah aplikasi</button></div><div className="search"><Search size={17}/><input placeholder="Cari aplikasi..." value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="app-list">{filtered.map(a=><button key={a.id} className={selected?.id===a.id?"app-row selected":"app-row"} onClick={()=>selectApp(a)}><div className="app-icon">{a.icon_url?<img src={a.icon_url}/>:<Package/>}</div><div className="app-meta"><b>{a.name}</b><span>{a.version||"—"} · {a.category||"Uncategorized"}</span></div><span className={"pill "+a.status}>{a.status}</span>{a.official&&<span className="official">OFFICIAL</span>}</button>)}</div></section>
+      <section className="panel editor">{selected||form.name ? <><div className="panel-head"><div><b>{selected?"Edit Aplikasi":"Aplikasi Baru"}</b><span>{selected?.id||"Belum disimpan"}</span></div>{selected&&<button className="danger" onClick={deleteApp}><Archive size={16}/></button>}</div>
         <div className="form-grid">{[["name","Nama aplikasi"],["developer","Developer / publisher"],["category","Kategori"],["version","Versi"],["size","Ukuran APK"],["android","Minimum Android"],["page_slug","Slug halaman"],["download_url","URL download"]].map(([k,l])=><label key={k}>{l}<input value={(form as any)[k]} onChange={e=>setForm({...form,[k]:e.target.value})}/></label>)}
         <label className="full">Deskripsi singkat<textarea rows={2} value={form.short_description} onChange={e=>setForm({...form,short_description:e.target.value})}/></label><label className="full">Deskripsi lengkap<textarea rows={6} value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><label className="full">SHA-256<input value={form.sha256} onChange={e=>setForm({...form,sha256:e.target.value})}/></label></div>
         <div className="toggles"><label><input type="checkbox" checked={form.official} onChange={e=>setForm({...form,official:e.target.checked})}/> Official</label><label>Status<select value={form.status} onChange={e=>setForm({...form,status:e.target.value as any})}><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label></div>
         <div className="actions"><button className="primary" onClick={saveApp} disabled={busy}>{busy?"Menyimpan...":"Simpan perubahan"}</button>{selected&&<button className="publish" onClick={publish}><ShieldCheck size={16}/>Verifikasi & Publish</button>}</div>
         {selected&&<><div className="subpanel"><div className="subhead"><b>Icon aplikasi</b><label className="upload"><Upload size={16}/>Upload icon<input type="file" accept="image/*" onChange={e=>e.target.files?.[0]&&uploadIcon(e.target.files[0])}/></label></div>{selected.icon_url&&<img className="preview-icon" src={selected.icon_url}/>}</div>
         <div className="subpanel"><div className="subhead"><b>Fitur aplikasi</b><button className="ghost small" onClick={addFeature}><Plus size={15}/>Tambah</button></div>{features.map(f=><div className="feature-row" key={f.id}><span>{f.title}</span><button onClick={()=>removeFeature(f.id)}><X size={15}/></button></div>)}{!features.length&&<small>Belum ada fitur.</small>}</div>
-        <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>e.target.files?.[0]&&uploadApk(e.target.files[0])}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:<button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah APK</button></div>}</section></div>}
+        <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>e.target.files?.[0]&&uploadApk(e.target.files[0])}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:<button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah aplikasi</button></div>}</section></div>}
     </main>
   </div>
 }
 
 function Dashboard({apps,onNew,onSelect}:{apps:AppRow[];onNew:()=>void;onSelect:(a:AppRow)=>void}){
  const published=apps.filter(a=>a.status==="published").length, official=apps.filter(a=>a.official).length, drafts=apps.filter(a=>a.status==="draft").length;
- return <div className="dash"><div className="stats"><div><Package/><span>Total aplikasi</span><b>{apps.length}</b></div><div><CheckCircle2/><span>Published</span><b>{published}</b></div><div><ShieldCheck/><span>Official</span><b>{official}</b></div><div><Pencil/><span>Draft</span><b>{drafts}</b></div></div><section className="hero-panel"><div><span className="eyebrow">LARA STUDIO CONTROL CENTER</span><h3>Kelola katalog aplikasi secara terpusat.</h3><p>Tambah APK, metadata, icon, fitur, rilis, dan status publikasi dari satu panel privat.</p><button className="primary" onClick={onNew}><Plus size={17}/>Tambah aplikasi</button></div><div className="hero-art">LS</div></section><section className="panel"><div className="panel-head"><div><b>Terbaru</b><span>{apps.length} aplikasi</span></div></div>{apps.slice(0,6).map(a=><button className="app-row" key={a.id} onClick={()=>onSelect(a)}><div className="app-icon">{a.icon_url?<img src={a.icon_url}/>:<Package/>}</div><div className="app-meta"><b>{a.name}</b><span>v{a.version||"—"} · {a.category||"—"}</span></div><span className={"pill "+a.status}>{a.status}</span></button>)}</section></div>
+ return <div className="dash"><div className="stats"><div><Package/><span>Total aplikasi</span><b>{apps.length}</b></div><div><CheckCircle2/><span>Published</span><b>{published}</b></div><div><ShieldCheck/><span>Official</span><b>{official}</b></div><div><Pencil/><span>Draft</span><b>{drafts}</b></div></div><section className="hero-panel"><div><span className="eyebrow">LARA STUDIO CONTROL CENTER</span><h3>Kelola katalog aplikasi secara terpusat.</h3><p>Tambah aplikasi, metadata, icon, fitur, rilis, dan status publikasi dari satu panel privat.</p><button className="primary" onClick={onNew}><Plus size={17}/>Tambah aplikasi</button></div><div className="hero-art">LS</div></section><section className="panel"><div className="panel-head"><div><b>Terbaru</b><span>{apps.length} aplikasi</span></div></div>{apps.slice(0,6).map(a=><button className="app-row" key={a.id} onClick={()=>onSelect(a)}><div className="app-icon">{a.icon_url?<img src={a.icon_url}/>:<Package/>}</div><div className="app-meta"><b>{a.name}</b><span>v{a.version||"—"} · {a.category||"—"}</span></div><span className={"pill "+a.status}>{a.status}</span></button>)}</section></div>
 }
