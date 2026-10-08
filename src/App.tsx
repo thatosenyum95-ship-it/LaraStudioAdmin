@@ -15,6 +15,7 @@ type Release={id:string;app_id:string;version:string;version_code:number|null;ap
 type AppForm={name:string;category:string;short_description:string;description:string;developer:string;page_slug:string;version:string;size:string;android:string;sha256:string;download_url:string;official:boolean;status:"draft"|"published"|"archived"};
 
 const emptyForm:AppForm={name:"",category:"Utilities",short_description:"",description:"",developer:"",page_slug:"",version:"1.0.0",size:"",android:"Android 8.0+",sha256:"",download_url:"",official:false,status:"draft"};
+const PUBLIC_CATALOG_URL="https://thatosenyum95-ship-it.github.io/lara-game-studio/apps.json";
 
 export default function App(){
   const [session,setSession]=useState<any>(null);
@@ -28,9 +29,59 @@ export default function App(){
   useEffect(()=>{ supabase.auth.getSession().then(({data})=>setSession(data.session)); const {data}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s)); return()=>data.subscription.unsubscribe(); },[]);
   useEffect(()=>{ if(session && session.user?.app_metadata?.is_admin===true) loadApps(); },[session]);
 
+  async function syncPublicCatalog(){
+    const response=await fetch(PUBLIC_CATALOG_URL+"?sync="+Date.now(),{cache:"no-store"});
+    if(!response.ok) throw new Error("Katalog Lara Studio tidak dapat dibaca.");
+    const catalog=await response.json();
+    if(!Array.isArray(catalog)) return;
+    const published=catalog.filter((a:any)=>a && (a.official===true || String(a.status||"").toLowerCase()==="tersedia"));
+    for(const a of published){
+      if(!a.id || !a.name) continue;
+      const pageSlug=String(a.page||"").replace(/^apps\\//,"").replace(/\\.html$/,"") || String(a.id);
+      const payload={
+        id:String(a.id), name:String(a.name), category:a.category||"Utilities",
+        version:a.version||"1.0.0", size:a.size||null, android:a.android||null,
+        sha256:a.sha256||null, verified:a.verified!==false, download_url:a.downloadUrl||null,
+        short_description:a.shortDescription||null, description:a.description||null,
+        developer:a.developer||"Lara Studio", icon_url:a.iconUrl||null,
+        page_slug:pageSlug, official:true, status:"published",
+        published_at:new Date().toISOString(), updated_at:new Date().toISOString()
+      };
+      const {error}=await supabase.from("store_apps").upsert(payload,{onConflict:"id"});
+      if(error) throw error;
+      const {data:current,error:currentError}=await supabase.from("app_releases").select("*").eq("app_id",String(a.id)).eq("is_current",true).limit(1);
+      if(currentError) throw currentError;
+      const currentRelease=(current||[])[0] as Release|undefined;
+      if(!currentRelease || currentRelease.version!==String(a.version||"1.0.0")){
+        if(currentRelease) {
+          const {error:e}=await supabase.from("app_releases").update({is_current:false}).eq("id",currentRelease.id);
+          if(e) throw e;
+        }
+        const {error:e}=await supabase.from("app_releases").insert({
+          app_id:String(a.id),version:String(a.version||"1.0.0"),version_code:null,
+          apk_path:null,apk_size_bytes:null,sha256:a.sha256||null,min_android:a.android||null,
+          architectures:[],release_notes:"Diimpor otomatis dari Lara Studio publik.",
+          is_current:true,status:"published"
+        });
+        if(e) throw e;
+      } else if(currentRelease.status!=="published"){
+        const {error:e}=await supabase.from("app_releases").update({status:"published",sha256:a.sha256||currentRelease.sha256,min_android:a.android||currentRelease.min_android}).eq("id",currentRelease.id);
+        if(e) throw e;
+      }
+    }
+  }
   async function loadApps(){
-    setBusy(true); const {data,error}=await supabase.from("store_apps").select("*").order("updated_at",{ascending:false});
-    if(error) flash(false,error.message); else setApps((data||[]) as AppRow[]); setBusy(false);
+    setBusy(true);
+    try {
+      await syncPublicCatalog();
+      const {data,error}=await supabase.from("store_apps").select("*").order("updated_at",{ascending:false});
+      if(error) throw error;
+      setApps((data||[]) as AppRow[]);
+    } catch(e:any) {
+      flash(false,e?.message || "Gagal memuat katalog.");
+    } finally {
+      setBusy(false);
+    }
   }
   function flash(ok:boolean,text:string){setNotice({ok,text});setTimeout(()=>setNotice(null),3500)}
   function selectApp(a:AppRow){setSelected(a);setForm({name:a.name,category:a.category||"",short_description:a.short_description||"",description:a.description||"",developer:a.developer||"",page_slug:a.page_slug||"",version:a.version||"1.0.0",size:a.size||"",android:a.android||"",sha256:a.sha256||"",download_url:a.download_url||"",official:a.official,status:a.status}); loadDetails(a.id);}
@@ -184,7 +235,7 @@ export default function App(){
     if(busy) return;
     if(!selected)return;
     if(!selected.verified) return flash(false,"Verifikasi aplikasi sebelum publish.");
-    if(!releases.some(r=>r.is_current && r.status==="published")) return flash(false,"Tetapkan satu release current terlebih dahulu.");
+    if(!releases.some(r=>r.is_current && r.status==="published") && !selected.download_url) return flash(false,"Tetapkan satu release current atau isi URL download terlebih dahulu.");
     setBusy(true);
     const {error}=await supabase.from("store_apps").update({status:"published",official:true,published_at:new Date().toISOString()}).eq("id",selected.id);
     if(error)flash(false,error.message);else{flash(true,"Aplikasi dipublikasikan sebagai Official.");await loadApps();setSelected({...selected,status:"published",official:true});}
@@ -216,7 +267,7 @@ export default function App(){
   : <button className="publish" onClick={publish} disabled={busy}><ShieldCheck size={16}/>Verifikasi & Publish</button>}</div>
         {selected&&<><div className="subpanel"><div className="subhead"><b>Icon aplikasi</b><label className="upload"><Upload size={16}/>Upload icon<input type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadIcon(f);e.currentTarget.value=""}}/></label></div>{selected.icon_url&&<img className="preview-icon" src={selected.icon_url}/>}</div>
         <div className="subpanel"><div className="subhead"><b>Fitur aplikasi</b><button className="ghost small" onClick={addFeature}><Plus size={15}/>Tambah</button></div>{features.map(f=><div className="feature-row" key={f.id}><span>{f.title}</span><button onClick={()=>removeFeature(f.id)}><X size={15}/></button></div>)}{!features.length&&<small>Belum ada fitur.</small>}</div>
-        <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)uploadApk(f);e.currentTarget.value=""}}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:<button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah aplikasi</button></div>}</section></div>}
+        <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)uploadApk(f);e.currentTarget.value=""}}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:r.apk_path?<button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button>:<span className="pill draft">EXTERNAL</span>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah aplikasi</button></div>}</section></div>}
     </main>
   </div>
 }
