@@ -15,8 +15,8 @@ type Release={id:string;app_id:string;version:string;version_code:number|null;ap
 
 type AppForm={name:string;category:string;short_description:string;description:string;developer:string;page_slug:string;version:string;size:string;android:string;sha256:string;download_url:string;icon_url:string;official:boolean;status:"draft"|"published"|"archived"};
 
-const LARA_STUDIO_PUBLIC_BASE="https://thatosenyum95-ship-it.github.io/lara-game-studio";
-const publicAppUrl=(slug:string)=>slug?`${LARA_STUDIO_PUBLIC_BASE}/apps/${slug}.html`:"";
+const LARA_STUDIO_PUBLIC_BASE="https://lara-apk.vercel.app";
+const publicAppUrl=(slug:string)=>slug?`${LARA_STUDIO_PUBLIC_BASE}/apps/app.html?app=${encodeURIComponent(slug)}`:"";
 const emptyForm:AppForm={name:"",category:"Utilities",short_description:"",description:"",developer:"",page_slug:"",version:"1.0.0",size:"",android:"Android 8.0+",sha256:"",download_url:"",icon_url:"",official:false,status:"draft"};
 
 export default function App(){
