@@ -100,8 +100,10 @@ export default function App(){
       else await supabase.from("app_media").insert({app_id:app.id,kind:"icon",storage_path:iconPath,sort_order:0});
       await supabase.from("store_apps").update({icon_url:iconUrl}).eq("id",app.id);
     }
-    const next={...app,download_url:urlData.publicUrl,icon_url:iconUrl,verified:true};
-    setSelected(next); setForm(x=>({...x,download_url:urlData.publicUrl,icon_url:iconUrl})); setReleases([release as Release]);
+    const {error:appUpdateError}=await supabase.from("store_apps").update({download_url:urlData.publicUrl,icon_url:iconUrl,verified:true,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,updated_at:new Date().toISOString()}).eq("id",app.id);
+    if(appUpdateError) throw appUpdateError;
+    const next={...app,download_url:urlData.publicUrl,icon_url:iconUrl,verified:true,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha};
+    setSelected(next); setForm(x=>({...x,download_url:urlData.publicUrl,icon_url:iconUrl,size:next.size||"",sha256:sha})); setReleases([release as Release]);
     return next;
   }
   async function saveApp(){
@@ -254,11 +256,26 @@ export default function App(){
     if(busy) return;
     if(!selected)return;
     if(!selected.verified) return flash(false,"Verifikasi aplikasi sebelum publish.");
-    if(!releases.some(r=>r.is_current && r.status==="published")) return flash(false,"Tetapkan satu release current terlebih dahulu.");
+    const currentRelease=releases.find(r=>r.is_current);
+    if(!currentRelease && !selected.download_url) return flash(false,"Tetapkan release current atau URL download terlebih dahulu.");
     setBusy(true);
-    const {error}=await supabase.from("store_apps").update({status:"published",official:true,published_at:new Date().toISOString()}).eq("id",selected.id);
-    if(error)flash(false,error.message);else{flash(true,"Aplikasi dipublikasikan sebagai Official.");await loadApps();setSelected({...selected,status:"published",official:true});}
-    setBusy(false);
+    let promoted=false;
+    try{
+      if(currentRelease && currentRelease.status!=="published"){
+        const {error:releaseError}=await supabase.from("app_releases").update({status:"published"}).eq("id",currentRelease.id);
+        if(releaseError) throw releaseError;
+        promoted=true;
+      }
+      const {error}=await supabase.from("store_apps").update({status:"published",official:true,published_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",selected.id);
+      if(error) throw error;
+      await loadApps(); await loadDetails(selected.id);
+      setSelected({...selected,status:"published",official:true});
+      setForm({...form,status:"published",official:true});
+      flash(true,"Aplikasi dipublikasikan sebagai Official beserta release current.");
+    }catch(e:any){
+      if(promoted && currentRelease) await supabase.from("app_releases").update({status:currentRelease.status}).eq("id",currentRelease.id);
+      flash(false,e?.message||"Gagal mempublikasikan aplikasi.");
+    }finally{setBusy(false);}
   }
   async function signIn(e:React.FormEvent){e.preventDefault();setBusy(true);setLoginError("");const {data,error}=await supabase.auth.signInWithPassword({email,password});if(error)setLoginError(error.message);else setSession(data.session);setBusy(false)}
   async function signOut(){await supabase.auth.signOut();setSession(null)}
