@@ -114,21 +114,23 @@ export default function App(){
     if(!file.name.toLowerCase().endsWith(".apk")) return flash(false,"File harus APK.");
     setBusy(true);
     try{
-      const [metaRaw, parsedRaw, buffer]=await Promise.all([
-        parseApkMeta(file,{skipMd5:true,partial:true}),
-        ApkApplication.loadAsync(file),
-        file.arrayBuffer()
-      ]);
-      const meta:any=metaRaw;\n      const parsed:any=parsedRaw;\n      const hash=await crypto.subtle.digest("SHA-256",buffer);
+      const buffer=await file.arrayBuffer();
+      const meta:any=await parseApkMeta(file,{skipMd5:true,partial:true});
+      const hash=await crypto.subtle.digest("SHA-256",buffer);
       const sha=Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
-      const iconBytes=(parsed as any).iconSteam as Uint8Array|undefined;
-      const iconUrl=iconBytes?.length?bytesToDataUrl(iconBytes):"";
-      const version=meta.versionName||parsed.versionName||"1.0.0";
-      const name=meta.label && !meta.labelIsResourceId ? meta.label : (parsed.name||meta.packageName||file.name.replace(/\.apk$/i,""));
+      let iconUrl="";
+      if(window.AppInfoParser){
+        try{
+          const parsed=await new window.AppInfoParser(file).parse();
+          if(parsed?.icon) iconUrl=String(parsed.icon);
+        }catch{}
+      }
+      const version=meta.versionName||"1.0.0";
+      const name=meta.label && !meta.labelIsResourceId ? meta.label : (meta.packageName||file.name.replace(/\\.apk$/i,""));
       const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
-      setNewApkFile(file); setNewApkVersionCode(Number(meta.versionCode||parsed.versionCode)||null);
+      setNewApkFile(file); setNewApkVersionCode(Number(meta.versionCode)||null);
       setForm(x=>({...x,name,version,size:(file.size/1024/1024).toFixed(2)+" MB",android:sdkName(meta.minSdkVersion),sha256:sha,page_slug:x.page_slug||slug,icon_url:iconUrl}));
-      flash(true,iconUrl?"APK berhasil dibaca: metadata + SHA-256 + icon otomatis.":"APK berhasil dibaca: metadata + SHA-256 otomatis. Icon tidak tersedia sebagai gambar raster yang bisa diekstrak.");
+      flash(true,iconUrl?"APK berhasil dibaca: metadata + SHA-256 + icon otomatis.":"APK berhasil dibaca. Metadata dan SHA-256 otomatis; icon akan dicoba lagi saat penyimpanan.");
     }catch(e:any){
       flash(false,e?.message||"APK tidak dapat dibaca. Pastikan file APK valid.");
     }finally{setBusy(false)}
