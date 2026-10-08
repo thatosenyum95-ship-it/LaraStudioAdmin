@@ -119,9 +119,9 @@ export default function App(){
       const hash=await crypto.subtle.digest("SHA-256",buffer);
       const sha=Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
       let iconUrl="";
-      if(window.AppInfoParser){
+      if((window as any).AppInfoParser){
         try{
-          const parsed=await new window.AppInfoParser(file).parse();
+          const parsed=await new (window as any).AppInfoParser(file).parse();
           if(parsed?.icon) iconUrl=String(parsed.icon);
         }catch{}
       }
