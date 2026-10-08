@@ -122,11 +122,12 @@ export default function App(){
     if(r.is_current) return;
     if(!confirm("Jadikan v"+r.version+" sebagai release current?")) return;
     setBusy(true);
+    const previous=releases.find(x=>x.is_current);
     const {error:clearError}=await supabase.from("app_releases").update({is_current:false}).eq("app_id",selected.id);
     if(clearError){flash(false,clearError.message);setBusy(false);return}
     const {error}=await supabase.from("app_releases").update({is_current:true,status:"published"}).eq("id",r.id);
     if(error){
-      await supabase.from("app_releases").update({is_current:true}).eq("id",r.id).eq("is_current",false);
+      if(previous) await supabase.from("app_releases").update({is_current:true,status:previous.status}).eq("id",previous.id);
       flash(false,error.message);setBusy(false);return
     }
     const publicUrl=r.apk_path ? supabase.storage.from("lara-apks").getPublicUrl(r.apk_path).data.publicUrl : null;
@@ -154,8 +155,14 @@ export default function App(){
     else {
       const iconUrl=data.publicUrl+"?v="+Date.now();
       setSelected({...selected,icon_url:iconUrl});
-      const {error:mediaError}=await supabase.from("app_media").insert({app_id:selected.id,kind:"icon",storage_path:path,sort_order:0});
-      if(mediaError) flash(false,mediaError.message); else flash(true,"Icon berhasil diunggah.");
+      const {data:existingMedia}=await supabase.from("app_media").select("id").eq("app_id",selected.id).eq("kind","icon").limit(1);
+      if(existingMedia?.length){
+        const {error:mediaError}=await supabase.from("app_media").update({storage_path:path,sort_order:0}).eq("id",existingMedia[0].id);
+        if(mediaError) flash(false,mediaError.message); else flash(true,"Icon berhasil diperbarui.");
+      } else {
+        const {error:mediaError}=await supabase.from("app_media").insert({app_id:selected.id,kind:"icon",storage_path:path,sort_order:0});
+        if(mediaError) flash(false,mediaError.message); else flash(true,"Icon berhasil diunggah.");
+      }
     }
     } catch(e:any) {
       flash(false,e?.message || "Gagal mengunggah icon.");
