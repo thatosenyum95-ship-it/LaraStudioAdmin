@@ -78,7 +78,7 @@ export default function App(){
     }).select().single();
     if(releaseError){flash(false,releaseError.message);setBusy(false);return}
     await supabase.from("store_apps").update({version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true,updated_at:new Date().toISOString()}).eq("id",selected.id);
-    setReleases([releaseError?releaseError:(data as Release),...releases]);
+    if(data) setReleases([data as Release,...releases]);
     setSelected({...selected,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true});
     setForm({...form,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl});
     flash(true,"APK diunggah dan SHA-256 dihitung. Release masih draft."); setBusy(false);
