@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { parseApkMeta } from "apk-meta-parser";
-import { Application as ApkApplication } from "@ov3rk1ll/js-app-parser";
+// @ts-expect-error apk-meta-parser ships browser types that can be stricter than Vite\nimport { parseApkMeta } from "apk-meta-parser";
+// @ts-expect-error js-app-parser exposes browser support but its declaration may not match File in all TS lib configurations\nimport { Application as ApkApplication } from "@ov3rk1ll/js-app-parser";
 import { supabase } from "./lib/supabase";
 import { LayoutDashboard, Package, Plus, LogOut, ShieldCheck, Search, Pencil, Archive, Upload, X, CheckCircle2, AlertCircle, RefreshCw } from "lucide-react";
 
@@ -114,12 +114,12 @@ export default function App(){
     if(!file.name.toLowerCase().endsWith(".apk")) return flash(false,"File harus APK.");
     setBusy(true);
     try{
-      const [meta, parsed, buffer]=await Promise.all([
+      const [metaRaw, parsedRaw, buffer]=await Promise.all([
         parseApkMeta(file,{skipMd5:true,partial:true}),
         ApkApplication.loadAsync(file),
         file.arrayBuffer()
       ]);
-      const hash=await crypto.subtle.digest("SHA-256",buffer);
+      const meta:any=metaRaw;\n      const parsed:any=parsedRaw;\n      const hash=await crypto.subtle.digest("SHA-256",buffer);
       const sha=Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
       const iconBytes=(parsed as any).iconSteam as Uint8Array|undefined;
       const iconUrl=iconBytes?.length?bytesToDataUrl(iconBytes):"";
