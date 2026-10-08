@@ -23,7 +23,7 @@ export default function App(){
   const [apps,setApps]=useState<AppRow[]>([]); const [selected,setSelected]=useState<AppRow|null>(null);
   const [form,setForm]=useState(emptyForm); const [features,setFeatures]=useState<Feature[]>([]);
   const [releases,setReleases]=useState<Release[]>([]); const [query,setQuery]=useState("");
-  const [creating,setCreating]=useState(false); const [newApkFile,setNewApkFile]=useState<File|null>(null);
+  const [creating,setCreating]=useState(false); const [newApkFile,setNewApkFile]=useState<File|null>(null); const [newApkVersionCode,setNewApkVersionCode]=useState<number|null>(null);
   const [notice,setNotice]=useState<{ok:boolean;text:string}|null>(null); const [view,setView]=useState<"dashboard"|"apps">("dashboard");
 
   useEffect(()=>{ supabase.auth.getSession().then(({data})=>setSession(data.session)); const {data}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s)); return()=>data.subscription.unsubscribe(); },[]);
@@ -34,7 +34,7 @@ export default function App(){
     if(error) flash(false,error.message); else setApps((data||[]) as AppRow[]); setBusy(false);
   }
   function flash(ok:boolean,text:string){setNotice({ok,text});setTimeout(()=>setNotice(null),3500)}
-  function selectApp(a:AppRow){setCreating(false);setNewApkFile(null);setSelected(a);setForm({name:a.name,category:a.category||"",short_description:a.short_description||"",description:a.description||"",developer:a.developer||"",page_slug:a.page_slug||"",version:a.version||"1.0.0",size:a.size||"",android:a.android||"",sha256:a.sha256||"",download_url:a.download_url||"",official:a.official,status:a.status}); loadDetails(a.id);}
+  function selectApp(a:AppRow){setCreating(false);setNewApkFile(null);setNewApkVersionCode(null);setSelected(a);setForm({name:a.name,category:a.category||"",short_description:a.short_description||"",description:a.description||"",developer:a.developer||"",page_slug:a.page_slug||"",version:a.version||"1.0.0",size:a.size||"",android:a.android||"",sha256:a.sha256||"",download_url:a.download_url||"",official:a.official,status:a.status}); loadDetails(a.id);}
   async function loadDetails(id:string){
     const [f,r]=await Promise.all([
       supabase.from("app_features").select("*").eq("app_id",id).order("sort_order"),
@@ -66,7 +66,7 @@ export default function App(){
       const name=String(rawName);
       const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
       const minSdk=Number(meta?.minSdkVersion||meta?.minSdk||meta?.usesSdk?.minSdkVersion||0);
-      setNewApkFile(file);
+      setNewApkFile(file); setNewApkVersionCode(Number(meta?.versionCode)||null);
       setForm(x=>({...x,name,version,size:(file.size/1024/1024).toFixed(2)+" MB",android:sdkName(minSdk),sha256:sha,page_slug:x.page_slug||slug,icon_url:iconUrl}));
       flash(true,iconUrl?"APK terbaca lengkap: metadata, SHA-256, dan icon otomatis.":"APK terbaca: metadata dan SHA-256 otomatis.");
     }catch(e:any){ flash(false,e?.message||"APK tidak dapat dibaca. Pastikan file APK valid."); }
@@ -81,21 +81,53 @@ export default function App(){
     setCreating(true);
     setView("apps");
   }
+  async function persistNewApk(app:AppRow,file:File,version:string,versionCode:number|null,sha:string){
+    const path="apps/"+app.id+"/"+version+"/"+file.name;
+    const {error:uploadError}=await supabase.storage.from("lara-apks").upload(path,file,{upsert:true,contentType:"application/vnd.android.package-archive"});
+    if(uploadError) throw uploadError;
+    const {data:urlData}=supabase.storage.from("lara-apks").getPublicUrl(path);
+    const {data:release,error:releaseError}=await supabase.from("app_releases").insert({app_id:app.id,version,version_code:versionCode,apk_path:path,apk_size_bytes:file.size,sha256:sha,min_android:app.android,release_notes:"",is_current:true,status:"draft"}).select().single();
+    if(releaseError) throw releaseError;
+    let iconUrl=app.icon_url;
+    if(form.icon_url){
+      const iconBlob=await (await fetch(form.icon_url)).blob();
+      const iconPath="apps/"+app.id+"/icon.png";
+      const {error:iconError}=await supabase.storage.from("lara-app-media").upload(iconPath,iconBlob,{upsert:true,contentType:iconBlob.type||"image/png"});
+      if(iconError) throw iconError;
+      iconUrl=supabase.storage.from("lara-app-media").getPublicUrl(iconPath).data.publicUrl;
+      const {data:media}=await supabase.from("app_media").select("id").eq("app_id",app.id).eq("kind","icon").limit(1);
+      if(media?.length) await supabase.from("app_media").update({storage_path:iconPath,sort_order:0}).eq("id",media[0].id);
+      else await supabase.from("app_media").insert({app_id:app.id,kind:"icon",storage_path:iconPath,sort_order:0});
+      await supabase.from("store_apps").update({icon_url:iconUrl}).eq("id",app.id);
+    }
+    const next={...app,download_url:urlData.publicUrl,icon_url:iconUrl,verified:true};
+    setSelected(next); setForm(x=>({...x,download_url:urlData.publicUrl,icon_url:iconUrl})); setReleases([release as Release]);
+    return next;
+  }
   async function saveApp(){
     if(busy) return;
-    if(!selected && !newApkFile) return flash(false,"Pilih file APK terlebih dahulu.");
+    const isNew=!selected;
+    if(isNew && !newApkFile) return flash(false,"Pilih file APK terlebih dahulu.");
     if(!form.name.trim()) return flash(false,"Nama aplikasi wajib diisi.");
-    if(form.status==="published" && (!selected || !releases.some(r=>r.is_current && r.status==="published"))){
-      return flash(false,"Untuk publish, tetapkan release current terlebih dahulu dan gunakan tombol Verifikasi & Publish.");
-    }
     setBusy(true);
-    const slug=form.page_slug.trim()||form.name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
-    const payload={...form,page_slug:slug,status:selected?.status||"draft",official:selected?.official||false,published_at:selected?.published_at||null,updated_at:new Date().toISOString()};
-    const q=selected ? supabase.from("store_apps").update(payload).eq("id",selected.id).select().single() : supabase.from("store_apps").insert(payload).select().single();
-    const {data,error}=await q;
-    if(error){flash(false,error.message);setBusy(false);return}
-    setSelected(data as AppRow); setCreating(false); setNewApkFile(null); await loadApps(); flash(true,selected?"Aplikasi diperbarui.":"Aplikasi dibuat sebagai draft."); setBusy(false);
+    try{
+      const slug=form.page_slug.trim()||form.name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+      if(!slug) throw new Error("Slug aplikasi tidak valid.");
+      const appId=isNew?slug:selected!.id;
+      const payload={id:appId,name:form.name.trim(),category:form.category.trim()||"Utilities",short_description:form.short_description.trim()||null,description:form.description.trim()||null,developer:form.developer.trim()||"Lara Studio",page_slug:slug,version:form.version.trim()||"1.0.0",size:form.size.trim()||null,android:form.android.trim()||null,sha256:form.sha256.trim()||null,download_url:form.download_url.trim()||"",icon_url:form.icon_url.trim()||null,official:false,status:"draft",published_at:null,updated_at:new Date().toISOString()};
+      const q=selected?supabase.from("store_apps").update(payload).eq("id",selected.id).select().single():supabase.from("store_apps").insert(payload).select().single();
+      const {data,error}=await q; if(error) throw error;
+      let saved=data as AppRow;
+      if(isNew && newApkFile) saved=await persistNewApk(saved,newApkFile,form.version.trim()||"1.0.0",newApkVersionCode,form.sha256);
+      setSelected(saved); setCreating(false); setNewApkFile(null); setNewApkVersionCode(null);
+      await loadApps(); await loadDetails(saved.id);
+      flash(true,isNew?"Aplikasi berhasil ditambahkan. APK, metadata, SHA-256, dan icon tersimpan otomatis.":"Aplikasi berhasil diperbarui.");
+    }catch(e:any){
+      if(isNew) await supabase.from("store_apps").delete().eq("id",slugForRollback(form));
+      flash(false,e?.message||"Gagal menyimpan aplikasi.");
+    }finally{setBusy(false);}
   }
+  function slugForRollback(x:AppForm){ return x.page_slug.trim()||x.name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,""); }
   async function deleteApp(){
     if(!selected || !confirm("Arsipkan aplikasi ini? Data dan histori rilis akan tetap aman.")) return;
     setBusy(true);
