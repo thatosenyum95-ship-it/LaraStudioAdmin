@@ -145,7 +145,6 @@ export default function App(){
     if(!selected)return flash(false,"Simpan aplikasi dulu.");
     setBusy(true);
     try {
-    try {
     const ext=file.name.split(".").pop()||"png"; const path=`apps/${selected.id}/icon.${ext}`;
     const {error}=await supabase.storage.from("lara-app-media").upload(path,file,{upsert:true,contentType:file.type});
     if(error){flash(false,error.message);return;}
