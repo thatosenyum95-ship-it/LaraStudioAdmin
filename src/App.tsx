@@ -103,6 +103,8 @@ export default function App(){
   setNewApkVersionCode(null);
   setCreating(true);
   setView("apps");
+  // Buka pemilih APK langsung setelah editor aplikasi baru selesai dirender.
+  requestAnimationFrame(()=>requestAnimationFrame(()=>document.getElementById("new-apk-input")?.click()));
 }
   function sdkName(sdk?:number){
     if(!sdk) return "Android";
