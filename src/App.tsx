@@ -60,6 +60,35 @@ export default function App(){
     if(error) flash(false,error.message); else setFeatures([...features,data as Feature]);
   }
   async function removeFeature(id:string){const {error}=await supabase.from("app_features").delete().eq("id",id); if(error)flash(false,error.message);else setFeatures(features.filter(x=>x.id!==id));}
+  async function uploadApk(file:File){
+    if(!selected)return flash(false,"Simpan aplikasi dulu.");
+    if(!file.name.toLowerCase().endsWith(".apk"))return flash(false,"File harus APK.");
+    const version=form.version.trim()||"1.0.0";
+    const path=`apps/${selected.id}/${version}/${file.name}`;
+    setBusy(true);
+    const buffer=await file.arrayBuffer();
+    const hash=await crypto.subtle.digest("SHA-256",buffer);
+    const sha=Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
+    const {error}=await supabase.storage.from("lara-apks").upload(path,file,{upsert:true,contentType:"application/vnd.android.package-archive"});
+    if(error){flash(false,error.message);setBusy(false);return}
+    const {data:urlData}=supabase.storage.from("lara-apks").getPublicUrl(path);
+    const {data,error:releaseError}=await supabase.from("app_releases").insert({
+      app_id:selected.id,version,apk_path:path,apk_size_bytes:file.size,sha256:sha,
+      min_android:form.android,release_notes:"",is_current:false,status:"draft"
+    }).select().single();
+    if(releaseError){flash(false,releaseError.message);setBusy(false);return}
+    await supabase.from("store_apps").update({version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true,updated_at:new Date().toISOString()}).eq("id",selected.id);
+    setReleases([releaseError?releaseError:(data as Release),...releases]);
+    setSelected({...selected,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true});
+    setForm({...form,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl});
+    flash(true,"APK diunggah dan SHA-256 dihitung. Release masih draft."); setBusy(false);
+  }
+  async function makeCurrentRelease(r:Release){
+    if(!selected)return;
+    await supabase.from("app_releases").update({is_current:false}).eq("app_id",selected.id);
+    const {error}=await supabase.from("app_releases").update({is_current:true,status:"published"}).eq("id",r.id);
+    if(error)flash(false,error.message);else{flash(true,"Release ditetapkan sebagai current.");await loadDetails(selected.id);}
+  }
   async function uploadIcon(file:File){
     if(!selected)return flash(false,"Simpan aplikasi dulu.");
     const ext=file.name.split(".").pop()||"png"; const path=`apps/${selected.id}/icon.${ext}`;
@@ -97,7 +126,7 @@ export default function App(){
         <div className="actions"><button className="primary" onClick={saveApp} disabled={busy}>{busy?"Menyimpan...":"Simpan perubahan"}</button>{selected&&<button className="publish" onClick={publish}><ShieldCheck size={16}/>Verifikasi & Publish</button>}</div>
         {selected&&<><div className="subpanel"><div className="subhead"><b>Icon aplikasi</b><label className="upload"><Upload size={16}/>Upload icon<input type="file" accept="image/*" onChange={e=>e.target.files?.[0]&&uploadIcon(e.target.files[0])}/></label></div>{selected.icon_url&&<img className="preview-icon" src={selected.icon_url}/>}</div>
         <div className="subpanel"><div className="subhead"><b>Fitur aplikasi</b><button className="ghost small" onClick={addFeature}><Plus size={15}/>Tambah</button></div>{features.map(f=><div className="feature-row" key={f.id}><span>{f.title}</span><button onClick={()=>removeFeature(f.id)}><X size={15}/></button></div>)}{!features.length&&<small>Belum ada fitur.</small>}</div>
-        <div className="subpanel"><div className="subhead"><b>Rilis</b><span>{releases.length} release</span></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>code {r.version_code||"—"} · {r.status}</span></div>{r.is_current&&<span className="official">CURRENT</span>}</div>)}{!releases.length&&<small>Belum ada release. Modul upload APK akan diaktifkan di tahap berikutnya.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah APK</button></div>}</section></div>}
+        <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>e.target.files?.[0]&&uploadApk(e.target.files[0])}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:<button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah APK</button></div>}</section></div>}
     </main>
   </div>
 }
