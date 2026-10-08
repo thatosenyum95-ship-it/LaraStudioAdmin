@@ -211,6 +211,26 @@ export default function App(){
       setBusy(false);
     }
   }
+  async function deleteRelease(r:Release){
+    if(!selected) return;
+    if(r.is_current) return flash(false,"Release current tidak bisa dihapus. Jadikan release lain sebagai current terlebih dahulu.");
+    if(!confirm("Hapus APK v"+r.version+" yang belum dipublikasikan? File APK dan data release ini akan dihapus permanen.")) return;
+    setBusy(true);
+    try{
+      if(r.apk_path){
+        const {error:storageError}=await supabase.storage.from("lara-apks").remove([r.apk_path]);
+        if(storageError) throw storageError;
+      }
+      const {error}=await supabase.from("app_releases").delete().eq("id",r.id).eq("app_id",selected.id);
+      if(error) throw error;
+      setReleases(releases.filter(x=>x.id!==r.id));
+      flash(true,"APK v"+r.version+" berhasil dihapus karena tidak jadi dipublikasikan.");
+    }catch(e:any){
+      flash(false,e?.message||"Gagal menghapus APK release.");
+    }finally{
+      setBusy(false);
+    }
+  }
   async function makeCurrentRelease(r:Release){
     if(!selected)return;
     if(!r.apk_path) return flash(false,"Release ini belum memiliki file APK.");
@@ -326,7 +346,7 @@ export default function App(){
   : <button className="publish" onClick={publish} disabled={busy}><ShieldCheck size={16}/>Verifikasi & Publish</button>}</div>
         {selected&&<><div className="subpanel"><div className="subhead"><b>Icon aplikasi</b><label className="upload"><Upload size={16}/>Upload icon<input type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadIcon(f);e.currentTarget.value=""}}/></label></div>{selected.icon_url&&<img className="preview-icon" src={selected.icon_url}/>}</div>
         <div className="subpanel"><div className="subhead"><b>Fitur aplikasi</b><button className="ghost small" onClick={addFeature}><Plus size={15}/>Tambah</button></div>{features.map(f=><div className="feature-row" key={f.id}><span>{f.title}</span><button onClick={()=>removeFeature(f.id)}><X size={15}/></button></div>)}{!features.length&&<small>Belum ada fitur.</small>}</div>
-        <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)uploadApk(f);e.currentTarget.value=""}}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:<button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah aplikasi</button></div>}</section></div>}
+        <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)uploadApk(f);e.currentTarget.value=""}}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:<div style={{display:"flex",gap:8,alignItems:"center"}}><button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button><button className="danger small" onClick={()=>deleteRelease(r)} disabled={busy}>Hapus</button></div>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah aplikasi</button></div>}</section></div>}
     </main>
   </div>
 }
