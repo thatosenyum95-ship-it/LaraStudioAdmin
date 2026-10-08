@@ -35,8 +35,13 @@ export default function App(){
   function flash(ok:boolean,text:string){setNotice({ok,text});setTimeout(()=>setNotice(null),3500)}
   function selectApp(a:AppRow){setSelected(a);setForm({name:a.name,category:a.category||"",short_description:a.short_description||"",description:a.description||"",developer:a.developer||"",page_slug:a.page_slug||"",version:a.version||"1.0.0",size:a.size||"",android:a.android||"",sha256:a.sha256||"",download_url:a.download_url||"",official:a.official,status:a.status}); loadDetails(a.id);}
   async function loadDetails(id:string){
-    const [f,r]=await Promise.all([supabase.from("app_features").select("*").eq("app_id",id).order("sort_order"),supabase.from("app_releases").select("*").eq("app_id",id).order("created_at",{ascending:false})]);
-    setFeatures((f.data||[]) as Feature[]); setReleases((r.data||[]) as Release[]);
+    const [f,r]=await Promise.all([
+      supabase.from("app_features").select("*").eq("app_id",id).order("sort_order"),
+      supabase.from("app_releases").select("*").eq("app_id",id).order("created_at",{ascending:false})
+    ]);
+    if(f.error || r.error){ flash(false, f.error?.message || r.error?.message || "Gagal memuat detail aplikasi."); return; }
+    setFeatures((f.data||[]) as Feature[]);
+    setReleases((r.data||[]) as Release[]);
   }
   function newApp(){setSelected(null);setForm(emptyForm);setFeatures([]);setReleases([]);setView("apps")}
   async function saveApp(){
@@ -58,15 +63,26 @@ export default function App(){
   }
   async function addFeature(){
     if(!selected) return flash(false,"Simpan aplikasi dulu.");
-    const title=prompt("Nama fitur:"); if(!title) return;
-    const {data,error}=await supabase.from("app_features").insert({app_id:selected.id,title,sort_order:features.length}).select().single();
-    if(error) flash(false,error.message); else setFeatures([...features,data as Feature]);
+    const title=prompt("Nama fitur:");
+    if(!title?.trim()) return;
+    setBusy(true);
+    const {data,error}=await supabase.from("app_features").insert({app_id:selected.id,title:title.trim(),sort_order:features.length}).select().single();
+    if(error) flash(false,error.message); else { setFeatures([...features,data as Feature]); flash(true,"Fitur ditambahkan."); }
+    setBusy(false);
   }
-  async function removeFeature(id:string){const {error}=await supabase.from("app_features").delete().eq("id",id); if(error)flash(false,error.message);else setFeatures(features.filter(x=>x.id!==id));}
+  async function removeFeature(id:string){
+    if(!confirm("Hapus fitur ini?")) return;
+    setBusy(true);
+    const {error}=await supabase.from("app_features").delete().eq("id",id);
+    if(error) flash(false,error.message); else { setFeatures(features.filter(x=>x.id!==id)); flash(true,"Fitur dihapus."); }
+    setBusy(false);
+  }
   async function uploadApk(file:File){
+    if(busy) return;
     if(!selected)return flash(false,"Simpan aplikasi dulu.");
     if(!file.name.toLowerCase().endsWith(".apk"))return flash(false,"File harus APK.");
     const version=form.version.trim()||"1.0.0";
+    if(releases.some(r=>r.version===version)) return flash(false,"Release v"+version+" sudah ada. Gunakan nomor versi baru.");
     const path=`apps/${selected.id}/${version}/${file.name}`;
     setBusy(true);
     const buffer=await file.arrayBuffer();
@@ -80,7 +96,8 @@ export default function App(){
       min_android:form.android,release_notes:"",is_current:false,status:"draft"
     }).select().single();
     if(releaseError){flash(false,releaseError.message);setBusy(false);return}
-    await supabase.from("store_apps").update({version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true,updated_at:new Date().toISOString()}).eq("id",selected.id);
+    const {error:appError}=await supabase.from("store_apps").update({version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true,updated_at:new Date().toISOString()}).eq("id",selected.id);
+    if(appError){flash(false,appError.message);setBusy(false);return}
     if(data) setReleases([data as Release,...releases]);
     setSelected({...selected,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true});
     setForm({...form,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl});
@@ -111,7 +128,23 @@ export default function App(){
     if(error)return flash(false,error.message);
     const {data}=supabase.storage.from("lara-app-media").getPublicUrl(path);
     const {error:dbError}=await supabase.from("store_apps").update({icon_url:data.publicUrl}).eq("id",selected.id);
-    if(dbError)flash(false,dbError.message);else{setForm({...form,});setSelected({...selected,icon_url:data.publicUrl});flash(true,"Icon berhasil diunggah.")}
+    if(dbError) flash(false,dbError.message);
+    else {
+      const iconUrl=data.publicUrl+"?v="+Date.now();
+      setSelected({...selected,icon_url:iconUrl});
+      await supabase.from("app_media").insert({app_id:selected.id,kind:"icon",storage_path:path,sort_order:0});
+      flash(true,"Icon berhasil diunggah.");
+    }
+    setBusy(false);
+  }
+  async function unpublish(){
+    if(!selected || selected.status!=="published") return;
+    if(!confirm("Batalkan publikasi aplikasi ini?")) return;
+    setBusy(true);
+    const {error}=await supabase.from("store_apps").update({status:"draft",official:false,updated_at:new Date().toISOString()}).eq("id",selected.id);
+    if(error) flash(false,error.message);
+    else { setSelected({...selected,status:"draft",official:false}); setForm({...form,status:"draft",official:false}); await loadApps(); flash(true,"Aplikasi kembali menjadi draft."); }
+    setBusy(false);
   }
   async function publish(){
     if(!selected)return;
@@ -133,7 +166,7 @@ export default function App(){
       <nav><button className={view==="dashboard"?"active":""} onClick={()=>setView("dashboard")}><LayoutDashboard/>Dashboard</button><button className={view==="apps"?"active":""} onClick={()=>setView("apps")}><Package/>Aplikasi</button></nav>
       <div className="side-bottom"><div className="admin-chip"><ShieldCheck size={16}/> Admin terverifikasi</div><button className="logout" onClick={signOut}><LogOut/>Keluar</button></div>
     </aside>
-    <main><header><div><h2>{view==="dashboard"?"Dashboard":"Manajemen Aplikasi"}</h2><p>Kelola katalog publik tanpa menyentuh website Lara Studio.</p></div><button className="ghost" onClick={loadApps}><RefreshCw size={17}/>Refresh</button></header>
+    <main><header><div><h2>{view==="dashboard"?"Dashboard":"Manajemen Aplikasi"}</h2><p>Kelola katalog publik tanpa menyentuh website Lara Studio.</p></div><button className="ghost" onClick={loadApps} disabled={busy}><RefreshCw size={17}/>Refresh</button></header>
       {notice&&<div className={notice.ok?"notice ok":"notice"}>{notice.ok?<CheckCircle2/>:<AlertCircle/>}{notice.text}</div>}
       {view==="dashboard" ? <Dashboard apps={apps} onNew={newApp} onSelect={(a)=>{selectApp(a);setView("apps")}}/> :
       <div className="content-grid"><section className="panel"><div className="panel-head"><div><b>Aplikasi</b><span>{apps.length} item</span></div><button className="primary" onClick={newApp}><Plus size={17}/>Tambah aplikasi</button></div><div className="search"><Search size={17}/><input placeholder="Cari aplikasi..." value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="app-list">{filtered.map(a=><button key={a.id} className={selected?.id===a.id?"app-row selected":"app-row"} onClick={()=>selectApp(a)}><div className="app-icon">{a.icon_url?<img src={a.icon_url}/>:<Package/>}</div><div className="app-meta"><b>{a.name}</b><span>{a.version||"—"} · {a.category||"Uncategorized"}</span></div><span className={"pill "+a.status}>{a.status}</span>{a.official&&<span className="official">OFFICIAL</span>}</button>)}</div></section>
@@ -141,10 +174,12 @@ export default function App(){
         <div className="form-grid">{[["name","Nama aplikasi"],["developer","Developer / publisher"],["category","Kategori"],["version","Versi"],["size","Ukuran APK"],["android","Minimum Android"],["page_slug","Slug halaman"],["download_url","URL download"]].map(([k,l])=><label key={k}>{l}<input value={(form as any)[k]} onChange={e=>setForm({...form,[k]:e.target.value})}/></label>)}
         <label className="full">Deskripsi singkat<textarea rows={2} value={form.short_description} onChange={e=>setForm({...form,short_description:e.target.value})}/></label><label className="full">Deskripsi lengkap<textarea rows={6} value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><label className="full">SHA-256<input value={form.sha256} onChange={e=>setForm({...form,sha256:e.target.value})}/></label></div>
         <div className="toggles"><label><input type="checkbox" checked={form.official} onChange={e=>setForm({...form,official:e.target.checked})}/> Official</label><label>Status<select value={form.status} onChange={e=>setForm({...form,status:e.target.value as any})}><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label></div>
-        <div className="actions"><button className="primary" onClick={saveApp} disabled={busy}>{busy?"Menyimpan...":"Simpan perubahan"}</button>{selected&&<button className="publish" onClick={publish}><ShieldCheck size={16}/>Verifikasi & Publish</button>}</div>
-        {selected&&<><div className="subpanel"><div className="subhead"><b>Icon aplikasi</b><label className="upload"><Upload size={16}/>Upload icon<input type="file" accept="image/*" onChange={e=>e.target.files?.[0]&&uploadIcon(e.target.files[0])}/></label></div>{selected.icon_url&&<img className="preview-icon" src={selected.icon_url}/>}</div>
+        <div className="actions"><button className="primary" onClick={saveApp} disabled={busy}>{busy?"Menyimpan...":"Simpan perubahan"}</button>{selected.status==="published"
+  ? <button className="ghost" onClick={unpublish} disabled={busy}>Batalkan publish</button>
+  : <button className="publish" onClick={publish} disabled={busy}><ShieldCheck size={16}/>Verifikasi & Publish</button>}</div>
+        {selected&&<><div className="subpanel"><div className="subhead"><b>Icon aplikasi</b><label className="upload"><Upload size={16}/>Upload icon<input type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadIcon(f);e.currentTarget.value=""}}/></label></div>{selected.icon_url&&<img className="preview-icon" src={selected.icon_url}/>}</div>
         <div className="subpanel"><div className="subhead"><b>Fitur aplikasi</b><button className="ghost small" onClick={addFeature}><Plus size={15}/>Tambah</button></div>{features.map(f=><div className="feature-row" key={f.id}><span>{f.title}</span><button onClick={()=>removeFeature(f.id)}><X size={15}/></button></div>)}{!features.length&&<small>Belum ada fitur.</small>}</div>
-        <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>e.target.files?.[0]&&uploadApk(e.target.files[0])}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:<button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah aplikasi</button></div>}</section></div>}
+        <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)uploadApk(f);e.currentTarget.value=""}}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:<button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah aplikasi</button></div>}</section></div>}
     </main>
   </div>
 }
