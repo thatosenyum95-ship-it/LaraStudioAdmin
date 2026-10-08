@@ -94,7 +94,16 @@ export default function App(){
     setFeatures((f.data||[]) as Feature[]);
     setReleases((r.data||[]) as Release[]);
   }
-  function newApp(){setSelected(null);setForm(emptyForm);setFeatures([]);setReleases([]);setNewApkFile(null);setNewApkVersionCode(null);setCreating(true);setView("apps")}
+  function newApp(){
+  setSelected(null);
+  setForm({...emptyForm});
+  setFeatures([]);
+  setReleases([]);
+  setNewApkFile(null);
+  setNewApkVersionCode(null);
+  setCreating(true);
+  setView("apps");
+}
   function sdkName(sdk?:number){
     if(!sdk) return "Android";
     const map:Record<number,string>={21:"5.0",22:"5.1",23:"6.0",24:"7.0",25:"7.1",26:"8.0",27:"8.1",28:"9",29:"10",30:"11",31:"12",32:"12L",33:"13",34:"14",35:"15",36:"16",37:"17"};
@@ -119,12 +128,9 @@ export default function App(){
       const hash=await crypto.subtle.digest("SHA-256",buffer);
       const sha=Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
       let iconUrl="";
-      if((window as any).AppInfoParser){
-        try{
-          const parsed=await new (window as any).AppInfoParser(file).parse();
-          if(parsed?.icon) iconUrl=String(parsed.icon);
-        }catch{}
-      }
+      try{
+        if(typeof meta?.icon==="string" && meta.icon.startsWith("data:image/")) iconUrl=meta.icon;
+      }catch{}
       const version=meta.versionName||meta.version||"1.0.0";
       const name=meta.application?.label||meta.label||meta.packageName||file.name.replace(/\\.apk$/i,"");
       const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
@@ -164,25 +170,59 @@ export default function App(){
   }
   async function saveApp(){
     if(busy) return;
-    if(!form.name.trim()) return flash(false,"Pilih APK terlebih dahulu agar metadata aplikasi terisi otomatis.");
+    const isNew=!selected;
+    if(isNew && !newApkFile) return flash(false,"Pilih file APK terlebih dahulu. Data aplikasi akan dibaca otomatis dari APK.");
+    if(!form.name.trim()) return flash(false,"Pilih file APK terlebih dahulu agar nama aplikasi terisi otomatis.");
     setBusy(true);
     try{
       const slug=form.page_slug.trim()||form.name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
-      const isNew=!selected;
-      const payload={...form,page_slug:slug,icon_url:form.icon_url||null,status:"draft",official:false,published_at:null,updated_at:new Date().toISOString()};
-      const q=selected ? supabase.from("store_apps").update(payload).eq("id",selected.id).select().single() : supabase.from("store_apps").insert(payload).select().single();
+      if(!slug) throw new Error("Slug aplikasi tidak valid.");
+      const appId=isNew ? slug : selected!.id;
+      const payload={
+        id:appId,
+        name:form.name.trim(),
+        category:form.category.trim()||"Utilities",
+        short_description:form.short_description.trim()||null,
+        description:form.description.trim()||null,
+        developer:form.developer.trim()||"Lara Studio",
+        page_slug:slug,
+        version:form.version.trim()||"1.0.0",
+        size:form.size.trim()||null,
+        android:form.android.trim()||null,
+        sha256:form.sha256.trim()||null,
+        download_url:form.download_url.trim()||"",
+        icon_url:form.icon_url.trim()||null,
+        official:false,
+        status:"draft",
+        published_at:null,
+        updated_at:new Date().toISOString()
+      };
+      const q=selected
+        ? supabase.from("store_apps").update(payload).eq("id",selected.id).select().single()
+        : supabase.from("store_apps").insert(payload).select().single();
       const {data,error}=await q;
       if(error) throw error;
       let saved=data as AppRow;
-      if(isNew && newApkFile){
-        saved=await persistNewApk(saved,newApkFile,form.version,newApkVersionCode,form.sha256);
+      try{
+        if(isNew && newApkFile){
+          saved=await persistNewApk(saved,newApkFile,form.version.trim()||"1.0.0",newApkVersionCode,form.sha256);
+        }
+      }catch(uploadError){
+        if(isNew) await supabase.from("store_apps").delete().eq("id",saved.id);
+        throw uploadError;
       }
-      setSelected(saved); setCreating(false); setNewApkFile(null); setNewApkVersionCode(null);
+      setSelected(saved);
+      setCreating(false);
+      setNewApkFile(null);
+      setNewApkVersionCode(null);
       await loadApps();
       await loadDetails(saved.id);
-      flash(true,isNew?"Aplikasi ditambahkan. Icon, versi, ukuran, minimum Android dan SHA-256 sudah otomatis tersimpan.":"Aplikasi diperbarui.");
-    }catch(e:any){ flash(false,e?.message||"Gagal menyimpan aplikasi."); }
-    finally{setBusy(false)}
+      flash(true,isNew?"Aplikasi berhasil ditambahkan. APK, metadata, SHA-256, dan icon tersimpan otomatis.":"Aplikasi berhasil diperbarui.");
+    }catch(e:any){
+      flash(false,e?.message||"Gagal menyimpan aplikasi.");
+    }finally{
+      setBusy(false);
+    }
   }
   async function deleteApp(){
     if(!selected || !confirm("Arsipkan aplikasi ini? Data dan histori rilis akan tetap aman.")) return;
@@ -334,9 +374,9 @@ export default function App(){
       {view==="dashboard" ? <Dashboard apps={apps} onNew={newApp} onSelect={(a)=>{selectApp(a);setView("apps")}}/> :
       <div className="content-grid"><section className="panel"><div className="panel-head"><div><b>Aplikasi</b><span>{apps.length} item</span></div><button className="primary" onClick={newApp}><Plus size={17}/>Tambah aplikasi</button></div><div className="search"><Search size={17}/><input placeholder="Cari aplikasi..." value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="app-list">{filtered.map(a=><button key={a.id} className={selected?.id===a.id?"app-row selected":"app-row"} onClick={()=>selectApp(a)}><div className="app-icon">{a.icon_url?<img src={a.icon_url}/>:<Package/>}</div><div className="app-meta"><b>{a.name}</b><span>{a.version||"—"} · {a.category||"Uncategorized"}</span></div><span className={"pill "+a.status}>{a.status}</span>{a.official&&<span className="official">OFFICIAL</span>}</button>)}</div></section>
       <section className="panel editor">{selected||creating ? <><div className="panel-head"><div><b>{selected?"Edit Aplikasi":"Aplikasi Baru"}</b><span>{selected?.id||"Belum disimpan"}</span></div>{selected&&<button className="danger" onClick={deleteApp}><Archive size={16}/></button>}</div>
-        <div className="form-grid">{[["name","Nama aplikasi"],["developer","Developer / publisher"],["category","Kategori"],["version","Versi"],["size","Ukuran APK"],["android","Minimum Android"],["page_slug","Slug halaman"],["download_url","URL download"]].map(([k,l])=><label key={k}>{l}<input value={(form as any)[k]} onChange={e=>setForm({...form,[k]:e.target.value})}/></label>)}<label className="full apk-import">Pilih file APK — semua data otomatis<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)inspectApk(f);e.currentTarget.value=""}}/><small>Nama, versi, ukuran, minimum Android, SHA-256, dan icon dibaca langsung dari APK. Setelah klik Simpan, APK dan icon ikut disimpan otomatis.</small>{form.icon_url&&<img className="preview-icon" src={form.icon_url}/>}</label><label className="full">Deskripsi singkat<textarea rows={2} value={form.short_description} onChange={e=>setForm({...form,short_description:e.target.value})}/></label><label className="full">Deskripsi lengkap<textarea rows={6} value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><label className="full">SHA-256 (otomatis)<input value={form.sha256} readOnly/></label></div>
+        <div className="form-grid">{[["name","Nama aplikasi"],["developer","Developer / publisher"],["category","Kategori"],["version","Versi"],["size","Ukuran APK"],["android","Minimum Android"],["page_slug","Slug halaman"],["download_url","URL download"]].map(([k,l])=><label key={k}>{l}<input value={(form as any)[k]} readOnly={creating && ["name","version","size","android","sha256","download_url"].includes(k)} onChange={e=>setForm({...form,[k]:e.target.value})}/></label>)}<label className="full apk-import">Pilih file APK — semua data otomatis<input id="new-apk-input" type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)inspectApk(f);e.currentTarget.value=""}}/><small>Nama, versi, ukuran, minimum Android, SHA-256, dan icon dibaca langsung dari APK. Setelah klik Simpan, APK dan icon ikut disimpan otomatis.</small>{form.icon_url&&<img className="preview-icon" src={form.icon_url}/>}</label><label className="full">Deskripsi singkat<textarea rows={2} value={form.short_description} onChange={e=>setForm({...form,short_description:e.target.value})}/></label><label className="full">Deskripsi lengkap<textarea rows={6} value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><label className="full">SHA-256 (otomatis)<input value={form.sha256} readOnly/></label></div>
         <div className="toggles"><label><input type="checkbox" checked={selected?.official||false} disabled/> Official</label><label>Status<select value={selected?.status||"draft"} disabled><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label></div>
-        <div className="actions"><button className="primary" onClick={saveApp} disabled={busy}>{busy?"Menyimpan...":"Simpan perubahan"}</button>{selected?.status==="published"
+        <div className="actions"><button className="primary" onClick={saveApp} disabled={busy}>{busy?"Menyimpan...":creating?"Simpan aplikasi":"Simpan perubahan"}</button>{selected?.status==="published"
   ? <button className="ghost" onClick={unpublish} disabled={busy}>Batalkan publish</button>
   : <button className="publish" onClick={publish} disabled={busy}><ShieldCheck size={16}/>Verifikasi & Publish</button>}</div>
         {selected&&<><div className="subpanel"><div className="subhead"><b>Icon aplikasi</b><label className="upload"><Upload size={16}/>Upload icon<input type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)uploadIcon(f);e.currentTarget.value=""}}/></label></div>{selected.icon_url&&<img className="preview-icon" src={selected.icon_url}/>}</div>
