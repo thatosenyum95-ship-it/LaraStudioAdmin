@@ -14,6 +14,8 @@ type Release={id:string;app_id:string;version:string;version_code:number|null;ap
 
 type AppForm={name:string;category:string;short_description:string;description:string;developer:string;page_slug:string;version:string;size:string;android:string;sha256:string;download_url:string;icon_url:string;official:boolean;status:"draft"|"published"|"archived"};
 
+const LARA_STUDIO_PUBLIC_BASE="https://thatosenyum95-ship-it.github.io/lara-game-studio";
+const publicAppUrl=(slug:string)=>slug?`${LARA_STUDIO_PUBLIC_BASE}/apps/${slug}.html`:"";
 const emptyForm:AppForm={name:"",category:"Utilities",short_description:"",description:"",developer:"",page_slug:"",version:"1.0.0",size:"",android:"Android 8.0+",sha256:"",download_url:"",icon_url:"",official:false,status:"draft"};
 
 export default function App(){
@@ -67,7 +69,7 @@ export default function App(){
       const slug=name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
       const minSdk=Number(meta?.minSdkVersion||meta?.minSdk||meta?.usesSdk?.minSdkVersion||0);
       setNewApkFile(file); setNewApkVersionCode(Number(meta?.versionCode)||null);
-      setForm(x=>({...x,name,version,size:(file.size/1024/1024).toFixed(2)+" MB",android:sdkName(minSdk),sha256:sha,page_slug:x.page_slug||slug,icon_url:iconUrl}));
+      setForm(x=>{const pageSlug=x.page_slug||slug;return {...x,name,version,size:(file.size/1024/1024).toFixed(2)+" MB",android:sdkName(minSdk),sha256:sha,page_slug:pageSlug,download_url:publicAppUrl(pageSlug),icon_url:iconUrl};});
       flash(true,iconUrl?"APK terbaca lengkap: metadata, SHA-256, dan icon otomatis.":"APK terbaca: metadata dan SHA-256 otomatis.");
     }catch(e:any){ flash(false,e?.message||"APK tidak dapat dibaca. Pastikan file APK valid."); }
     finally{ setBusy(false); }
@@ -100,10 +102,10 @@ export default function App(){
       else await supabase.from("app_media").insert({app_id:app.id,kind:"icon",storage_path:iconPath,sort_order:0});
       await supabase.from("store_apps").update({icon_url:iconUrl}).eq("id",app.id);
     }
-    const {error:appUpdateError}=await supabase.from("store_apps").update({download_url:urlData.publicUrl,icon_url:iconUrl,verified:true,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,updated_at:new Date().toISOString()}).eq("id",app.id);
+    const {error:appUpdateError}=await supabase.from("store_apps").update({download_url:publicAppUrl(app.page_slug||app.id),icon_url:iconUrl,verified:true,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,updated_at:new Date().toISOString()}).eq("id",app.id);
     if(appUpdateError) throw appUpdateError;
-    const next={...app,download_url:urlData.publicUrl,icon_url:iconUrl,verified:true,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha};
-    setSelected(next); setForm(x=>({...x,download_url:urlData.publicUrl,icon_url:iconUrl,size:next.size||"",sha256:sha})); setReleases([release as Release]);
+    const next={...app,download_url:publicAppUrl(app.page_slug||app.id),icon_url:iconUrl,verified:true,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha};
+    setSelected(next); setForm(x=>({...x,download_url:publicAppUrl(app.page_slug||app.id),icon_url:iconUrl,size:next.size||"",sha256:sha})); setReleases([release as Release]);
     return next;
   }
   async function saveApp(){
@@ -173,14 +175,14 @@ export default function App(){
       min_android:form.android,release_notes:"",is_current:false,status:"draft"
     }).select().single();
     if(releaseError){flash(false,releaseError.message);setBusy(false);return}
-    const {error:appError}=await supabase.from("store_apps").update({version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true,updated_at:new Date().toISOString()}).eq("id",selected.id);
+    const {error:appError}=await supabase.from("store_apps").update({version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:publicAppUrl(selected.page_slug||selected.id),verified:true,updated_at:new Date().toISOString()}).eq("id",selected.id);
     if(appError){
       await supabase.from("app_releases").delete().eq("id",data?.id);
       flash(false,appError.message);return
     }
     if(data) setReleases([data as Release,...releases]);
-    setSelected({...selected,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true});
-    setForm({...form,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl});
+    setSelected({...selected,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:publicAppUrl(selected.page_slug||selected.id),verified:true});
+    setForm({...form,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:publicAppUrl(selected.page_slug||selected.id)});
     flash(true,"APK diunggah dan SHA-256 dihitung. Release masih draft.");
     } catch(e:any) {
       flash(false,e?.message || "Gagal memproses APK.");
@@ -203,7 +205,7 @@ export default function App(){
       flash(false,error.message);setBusy(false);return
     }
     const publicUrl=r.apk_path ? supabase.storage.from("lara-apks").getPublicUrl(r.apk_path).data.publicUrl : null;
-    const next={version:r.version,size:r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):selected.size,sha256:r.sha256||selected.sha256,download_url:publicUrl||selected.download_url,updated_at:new Date().toISOString(),verified:true};
+    const next={version:r.version,size:r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):selected.size,sha256:r.sha256||selected.sha256,download_url:publicAppUrl(selected.page_slug||selected.id)||selected.download_url,updated_at:new Date().toISOString(),verified:true};
     const {error:appError}=await supabase.from("store_apps").update(next).eq("id",selected.id);
     if(appError){flash(false,appError.message);setBusy(false);return}
     const updated={...selected,...next};
