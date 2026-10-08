@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-// @ts-expect-error apk-meta-parser ships browser types that can be stricter than Vite\nimport { parseApkMeta } from "apk-meta-parser";
+// @ts-expect-error apk-meta-parser ships browser types that can be stricter than Vite\n// @ts-expect-error apk-meta-parser does not expose compatible TypeScript declarations for this Vite build
+import { parseApkMeta } from "apk-meta-parser";
 // @ts-expect-error js-app-parser exposes browser support but its declaration may not match File in all TS lib configurations\nimport { Application as ApkApplication } from "@ov3rk1ll/js-app-parser";
 import { supabase } from "./lib/supabase";
 import { LayoutDashboard, Package, Plus, LogOut, ShieldCheck, Search, Pencil, Archive, Upload, X, CheckCircle2, AlertCircle, RefreshCw } from "lucide-react";
