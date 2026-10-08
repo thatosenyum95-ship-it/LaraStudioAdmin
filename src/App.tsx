@@ -45,7 +45,11 @@ export default function App(){
   }
   function newApp(){setSelected(null);setForm(emptyForm);setFeatures([]);setReleases([]);setView("apps")}
   async function saveApp(){
+    if(busy) return;
     if(!form.name.trim()) return flash(false,"Nama aplikasi wajib diisi.");
+    if(form.status==="published" && (!selected || !releases.some(r=>r.is_current && r.status==="published"))){
+      return flash(false,"Untuk publish, tetapkan release current terlebih dahulu dan gunakan tombol Verifikasi & Publish.");
+    }
     setBusy(true);
     const slug=form.page_slug.trim()||form.name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
     const payload={...form,page_slug:slug,updated_at:new Date().toISOString(),published_at:form.status==="published"?(selected?.published_at||new Date().toISOString()):null};
@@ -85,6 +89,7 @@ export default function App(){
     if(releases.some(r=>r.version===version)) return flash(false,"Release v"+version+" sudah ada. Gunakan nomor versi baru.");
     const path=`apps/${selected.id}/${version}/${file.name}`;
     setBusy(true);
+    try {
     const buffer=await file.arrayBuffer();
     const hash=await crypto.subtle.digest("SHA-256",buffer);
     const sha=Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
@@ -101,10 +106,18 @@ export default function App(){
     if(data) setReleases([data as Release,...releases]);
     setSelected({...selected,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true});
     setForm({...form,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl});
-    flash(true,"APK diunggah dan SHA-256 dihitung. Release masih draft."); setBusy(false);
+    flash(true,"APK diunggah dan SHA-256 dihitung. Release masih draft.");
+    } catch(e:any) {
+      flash(false,e?.message || "Gagal memproses APK.");
+    } finally {
+      setBusy(false);
+    }
   }
   async function makeCurrentRelease(r:Release){
     if(!selected)return;
+    if(!r.apk_path) return flash(false,"Release ini belum memiliki file APK.");
+    if(r.is_current) return;
+    if(!confirm("Jadikan v"+r.version+" sebagai release current?")) return;
     setBusy(true);
     const {error:clearError}=await supabase.from("app_releases").update({is_current:false}).eq("app_id",selected.id);
     if(clearError){flash(false,clearError.message);setBusy(false);return}
@@ -122,7 +135,10 @@ export default function App(){
     setBusy(false);
   }
   async function uploadIcon(file:File){
+    if(busy) return;
     if(!selected)return flash(false,"Simpan aplikasi dulu.");
+    setBusy(true);
+    try {
     const ext=file.name.split(".").pop()||"png"; const path=`apps/${selected.id}/icon.${ext}`;
     const {error}=await supabase.storage.from("lara-app-media").upload(path,file,{upsert:true,contentType:file.type});
     if(error)return flash(false,error.message);
@@ -135,9 +151,14 @@ export default function App(){
       await supabase.from("app_media").insert({app_id:selected.id,kind:"icon",storage_path:path,sort_order:0});
       flash(true,"Icon berhasil diunggah.");
     }
-    setBusy(false);
+    } catch(e:any) {
+      flash(false,e?.message || "Gagal mengunggah icon.");
+    } finally {
+      setBusy(false);
+    }
   }
   async function unpublish(){
+    if(busy) return;
     if(!selected || selected.status!=="published") return;
     if(!confirm("Batalkan publikasi aplikasi ini?")) return;
     setBusy(true);
@@ -147,11 +168,14 @@ export default function App(){
     setBusy(false);
   }
   async function publish(){
+    if(busy) return;
     if(!selected)return;
     if(!selected.verified) return flash(false,"Verifikasi aplikasi sebelum publish.");
     if(!releases.some(r=>r.is_current && r.status==="published")) return flash(false,"Tetapkan satu release current terlebih dahulu.");
+    setBusy(true);
     const {error}=await supabase.from("store_apps").update({status:"published",official:true,published_at:new Date().toISOString()}).eq("id",selected.id);
     if(error)flash(false,error.message);else{flash(true,"Aplikasi dipublikasikan sebagai Official.");await loadApps();setSelected({...selected,status:"published",official:true});}
+    setBusy(false);
   }
   async function signIn(e:React.FormEvent){e.preventDefault();setBusy(true);setLoginError("");const {data,error}=await supabase.auth.signInWithPassword({email,password});if(error)setLoginError(error.message);else setSession(data.session);setBusy(false)}
   async function signOut(){await supabase.auth.signOut();setSession(null)}
