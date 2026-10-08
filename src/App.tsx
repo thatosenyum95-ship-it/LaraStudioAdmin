@@ -171,6 +171,20 @@ export default function App(){
     if(error) flash(false,error.message); else { setFeatures([...features,data as Feature]); flash(true,"Fitur ditambahkan."); }
     setBusy(false);
   }
+  async function editFeature(f:Feature){
+    if(busy) return;
+    const title=prompt("Nama fitur:",f.title);
+    if(title===null || !title.trim()) return;
+    const description=prompt("Deskripsi fitur:",f.description||"");
+    setBusy(true);
+    try{
+      const {data,error}=await supabase.from("app_features").update({title:title.trim(),description:description?.trim()||null}).eq("id",f.id).select().single();
+      if(error) throw error;
+      setFeatures(prev=>prev.map(x=>x.id===f.id?data as Feature:x));
+      flash(true,"Fitur berhasil diperbarui.");
+    }catch(e:any){ flash(false,e?.message||"Gagal memperbarui fitur."); }
+    finally{ setBusy(false); }
+  }
   async function removeFeature(id:string){
     if(!confirm("Hapus fitur ini?")) return;
     setBusy(true);
@@ -308,6 +322,19 @@ export default function App(){
     }catch(e:any){ flash(false,e?.message||"Gagal mengunggah screenshot."); }
     finally{ setBusy(false); }
   }
+  async function editMedia(item:Media){
+    if(busy || !selected || item.kind!=="screenshot") return;
+    const alt=prompt("Nama/deskripsi screenshot:",item.alt_text||"");
+    if(alt===null) return;
+    setBusy(true);
+    try{
+      const {error}=await supabase.from("app_media").update({alt_text:alt.trim()||null}).eq("id",item.id).eq("app_id",selected.id);
+      if(error) throw error;
+      setMedia(prev=>prev.map(x=>x.id===item.id?{...x,alt_text:alt.trim()||null}:x));
+      flash(true,"Screenshot berhasil diperbarui.");
+    }catch(e:any){ flash(false,e?.message||"Gagal memperbarui screenshot."); }
+    finally{ setBusy(false); }
+  }
   async function removeMedia(item:Media){
     if(busy || !selected || item.kind!=="screenshot") return;
     if(!confirm("Hapus screenshot ini?")) return;
@@ -398,10 +425,10 @@ export default function App(){
             <label className="upload"><Upload size={16}/>Upload screenshot<input type="file" accept="image/*" multiple onChange={e=>{uploadMedia(e.target.files);e.currentTarget.value=""}}/></label>
           </div>
           {media.filter(x=>x.kind==="screenshot").length
-            ? <div className="media-grid">{media.filter(x=>x.kind==="screenshot").map(x=><div className="media-card" key={x.id}><img src={supabase.storage.from("lara-app-media").getPublicUrl(x.storage_path).data.publicUrl} alt={x.alt_text||"Screenshot"}/><button className="danger small" onClick={()=>removeMedia(x)}>Hapus</button></div>)}</div>
+            ? <div className="media-grid">{media.filter(x=>x.kind==="screenshot").map(x=><div className="media-card" key={x.id}><img src={supabase.storage.from("lara-app-media").getPublicUrl(x.storage_path).data.publicUrl} alt={x.alt_text||"Screenshot"}/><div className="media-actions"><button className="ghost small" onClick={()=>editMedia(x)} disabled={busy}><Pencil size={14}/>Edit</button><button className="danger small" onClick={()=>removeMedia(x)} disabled={busy}><X size={14}/>Hapus</button></div></div>)}</div>
             : <small>Belum ada screenshot. Jika otomatis belum tersedia, upload beberapa screenshot sekaligus di sini.</small>}
         </div>
-        <div className="subpanel"><div className="subhead"><b>Fitur aplikasi</b><button className="ghost small" onClick={addFeature}><Plus size={15}/>Tambah</button></div>{features.map(f=><div className="feature-row" key={f.id}><span>{f.title}</span><button onClick={()=>removeFeature(f.id)}><X size={15}/></button></div>)}{!features.length&&<small>Belum ada fitur.</small>}</div>
+        <div className="subpanel"><div className="subhead"><b>Fitur aplikasi</b><button className="ghost small" onClick={addFeature}><Plus size={15}/>Tambah</button></div>{features.map(f=><div className="feature-row" key={f.id}><div><b>{f.title}</b>{f.description&&<small>{f.description}</small>}</div><div className="row-actions"><button className="ghost small" onClick={()=>editFeature(f)} disabled={busy}><Pencil size={14}/>Edit</button><button className="danger small" onClick={()=>removeFeature(f.id)} disabled={busy}><X size={14}/>Hapus</button></div></div>)}{!features.length&&<small>Belum ada fitur.</small>}</div>
         <div className="subpanel"><div className="subhead"><b>Rilis APK</b><label className="upload"><Upload size={16}/>Upload APK<input type="file" accept=".apk,application/vnd.android.package-archive" onChange={e=>{const f=e.target.files?.[0];if(f)uploadApk(f);e.currentTarget.value=""}}/></label></div>{releases.map(r=><div className="release-row" key={r.id}><div><b>v{r.version}</b><span>{r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):"—"} · {r.status} · SHA {r.sha256?.slice(0,12)||"—"}…</span></div>{r.is_current?<span className="official">CURRENT</span>:<div style={{display:"flex",gap:8,alignItems:"center"}}><button className="ghost small" onClick={()=>makeCurrentRelease(r)}>Jadikan current</button><button className="danger small" onClick={()=>deleteRelease(r)} disabled={busy}>Hapus</button></div>}</div>)}{!releases.length&&<small>Belum ada release. Upload APK untuk membuat release draft dan menghitung SHA-256.</small>}</div></>}</> : <div className="empty"><Package size={40}/><b>Pilih aplikasi</b><span>Atau buat aplikasi baru untuk mulai.</span><button className="primary" onClick={newApp}><Plus size={16}/>Tambah aplikasi</button></div>}</section></div>}
     </main>
   </div>
