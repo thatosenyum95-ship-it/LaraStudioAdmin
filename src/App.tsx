@@ -113,7 +113,9 @@ export default function App(){
     setBusy(true);
     try{
       const buffer=await file.arrayBuffer();
-      const parser=(window as any).AppInfoParser;\n      if(!parser) throw new Error("Parser APK belum tersedia. Muat ulang halaman Admin.");\n      const meta:any=await new parser(file).parse();
+      const parser=(window as any).AppInfoParser;
+      if(!parser) throw new Error("Parser APK belum tersedia. Muat ulang halaman Admin.");
+      const meta:any=await new parser(file).parse();
       const hash=await crypto.subtle.digest("SHA-256",buffer);
       const sha=Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,"0")).join("");
       let iconUrl="";
