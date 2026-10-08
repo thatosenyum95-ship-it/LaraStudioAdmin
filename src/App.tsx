@@ -52,7 +52,7 @@ export default function App(){
     }
     setBusy(true);
     const slug=form.page_slug.trim()||form.name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
-    const payload={...form,page_slug:slug,updated_at:new Date().toISOString(),published_at:form.status==="published"?(selected?.published_at||new Date().toISOString()):null};
+    const payload={...form,page_slug:slug,status:selected?.status||"draft",official:selected?.official||false,published_at:selected?.published_at||null,updated_at:new Date().toISOString()};
     const q=selected ? supabase.from("store_apps").update(payload).eq("id",selected.id).select().single() : supabase.from("store_apps").insert(payload).select().single();
     const {data,error}=await q;
     if(error){flash(false,error.message);setBusy(false);return}
@@ -102,7 +102,11 @@ export default function App(){
     }).select().single();
     if(releaseError){flash(false,releaseError.message);setBusy(false);return}
     const {error:appError}=await supabase.from("store_apps").update({version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true,updated_at:new Date().toISOString()}).eq("id",selected.id);
-    if(appError){flash(false,appError.message);setBusy(false);return}
+    if(appError){
+      await supabase.from("app_releases").update({is_current:false}).eq("app_id",selected.id);
+      if(previous) await supabase.from("app_releases").update({is_current:true,status:previous.status}).eq("id",previous.id);
+      flash(false,appError.message);setBusy(false);return
+    }
     if(data) setReleases([data as Release,...releases]);
     setSelected({...selected,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true});
     setForm({...form,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl});
@@ -122,7 +126,10 @@ export default function App(){
     const {error:clearError}=await supabase.from("app_releases").update({is_current:false}).eq("app_id",selected.id);
     if(clearError){flash(false,clearError.message);setBusy(false);return}
     const {error}=await supabase.from("app_releases").update({is_current:true,status:"published"}).eq("id",r.id);
-    if(error){flash(false,error.message);setBusy(false);return}
+    if(error){
+      if(previous) await supabase.from("app_releases").update({is_current:true,status:previous.status}).eq("id",previous.id);
+      flash(false,error.message);setBusy(false);return
+    }
     const publicUrl=r.apk_path ? supabase.storage.from("lara-apks").getPublicUrl(r.apk_path).data.publicUrl : null;
     const next={version:r.version,size:r.apk_size_bytes?((r.apk_size_bytes/1024/1024).toFixed(2)+" MB"):selected.size,sha256:r.sha256||selected.sha256,download_url:publicUrl||selected.download_url,updated_at:new Date().toISOString(),verified:true};
     const {error:appError}=await supabase.from("store_apps").update(next).eq("id",selected.id);
@@ -139,17 +146,18 @@ export default function App(){
     if(!selected)return flash(false,"Simpan aplikasi dulu.");
     setBusy(true);
     try {
+    try {
     const ext=file.name.split(".").pop()||"png"; const path=`apps/${selected.id}/icon.${ext}`;
     const {error}=await supabase.storage.from("lara-app-media").upload(path,file,{upsert:true,contentType:file.type});
-    if(error)return flash(false,error.message);
+    if(error){flash(false,error.message);return;}
     const {data}=supabase.storage.from("lara-app-media").getPublicUrl(path);
     const {error:dbError}=await supabase.from("store_apps").update({icon_url:data.publicUrl}).eq("id",selected.id);
     if(dbError) flash(false,dbError.message);
     else {
       const iconUrl=data.publicUrl+"?v="+Date.now();
       setSelected({...selected,icon_url:iconUrl});
-      await supabase.from("app_media").insert({app_id:selected.id,kind:"icon",storage_path:path,sort_order:0});
-      flash(true,"Icon berhasil diunggah.");
+      const {error:mediaError}=await supabase.from("app_media").insert({app_id:selected.id,kind:"icon",storage_path:path,sort_order:0});
+      if(mediaError) flash(false,mediaError.message); else flash(true,"Icon berhasil diunggah.");
     }
     } catch(e:any) {
       flash(false,e?.message || "Gagal mengunggah icon.");
@@ -197,7 +205,7 @@ export default function App(){
       <section className="panel editor">{selected||form.name ? <><div className="panel-head"><div><b>{selected?"Edit Aplikasi":"Aplikasi Baru"}</b><span>{selected?.id||"Belum disimpan"}</span></div>{selected&&<button className="danger" onClick={deleteApp}><Archive size={16}/></button>}</div>
         <div className="form-grid">{[["name","Nama aplikasi"],["developer","Developer / publisher"],["category","Kategori"],["version","Versi"],["size","Ukuran APK"],["android","Minimum Android"],["page_slug","Slug halaman"],["download_url","URL download"]].map(([k,l])=><label key={k}>{l}<input value={(form as any)[k]} onChange={e=>setForm({...form,[k]:e.target.value})}/></label>)}
         <label className="full">Deskripsi singkat<textarea rows={2} value={form.short_description} onChange={e=>setForm({...form,short_description:e.target.value})}/></label><label className="full">Deskripsi lengkap<textarea rows={6} value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><label className="full">SHA-256<input value={form.sha256} onChange={e=>setForm({...form,sha256:e.target.value})}/></label></div>
-        <div className="toggles"><label><input type="checkbox" checked={form.official} onChange={e=>setForm({...form,official:e.target.checked})}/> Official</label><label>Status<select value={form.status} onChange={e=>setForm({...form,status:e.target.value as any})}><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label></div>
+        <div className="toggles"><label><input type="checkbox" checked={selected?.official||false} disabled/> Official</label><label>Status<select value={selected?.status||"draft"} disabled><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label></div>
         <div className="actions"><button className="primary" onClick={saveApp} disabled={busy}>{busy?"Menyimpan...":"Simpan perubahan"}</button>{selected.status==="published"
   ? <button className="ghost" onClick={unpublish} disabled={busy}>Batalkan publish</button>
   : <button className="publish" onClick={publish} disabled={busy}><ShieldCheck size={16}/>Verifikasi & Publish</button>}</div>
