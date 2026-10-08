@@ -103,9 +103,8 @@ export default function App(){
     if(releaseError){flash(false,releaseError.message);setBusy(false);return}
     const {error:appError}=await supabase.from("store_apps").update({version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true,updated_at:new Date().toISOString()}).eq("id",selected.id);
     if(appError){
-      await supabase.from("app_releases").update({is_current:false}).eq("app_id",selected.id);
-      if(previous) await supabase.from("app_releases").update({is_current:true,status:previous.status}).eq("id",previous.id);
-      flash(false,appError.message);setBusy(false);return
+      await supabase.from("app_releases").delete().eq("id",data?.id);
+      flash(false,appError.message);return
     }
     if(data) setReleases([data as Release,...releases]);
     setSelected({...selected,version,size:(file.size/1024/1024).toFixed(2)+" MB",sha256:sha,download_url:urlData.publicUrl,verified:true});
@@ -127,7 +126,7 @@ export default function App(){
     if(clearError){flash(false,clearError.message);setBusy(false);return}
     const {error}=await supabase.from("app_releases").update({is_current:true,status:"published"}).eq("id",r.id);
     if(error){
-      if(previous) await supabase.from("app_releases").update({is_current:true,status:previous.status}).eq("id",previous.id);
+      await supabase.from("app_releases").update({is_current:true}).eq("id",r.id).eq("is_current",false);
       flash(false,error.message);setBusy(false);return
     }
     const publicUrl=r.apk_path ? supabase.storage.from("lara-apks").getPublicUrl(r.apk_path).data.publicUrl : null;
